@@ -20,6 +20,38 @@ private let premiumJSON = #"{"defaultValue":{"type":"null"},"effectiveValue":{"t
     + #""isChanged":false,"key":"premium","kind":{"type":"triState"},"label":"Premium","#
     + #""requiresRelaunch":false,"value":{"type":"null"}}"#
 
+/// Sets every optional field, so each one's key is pinned.
+private let environment = ControlDescription(
+    key: "env",
+    label: "Environment",
+    section: "Network",
+    kind: .choice(options: ["staging", "production"]),
+    value: .string("staging"),
+    realValue: .string("production"),
+    effectiveValue: .string("staging"),
+    defaultValue: .string("production"),
+    requiresRelaunch: true,
+    nextLaunchValue: .string("staging"),
+    isChanged: true
+)
+
+private let environmentJSON = #"{"defaultValue":{"type":"string","value":"production"},"#
+    + #""effectiveValue":{"type":"string","value":"staging"},"isChanged":true,"key":"env","#
+    + #""kind":{"options":["staging","production"],"type":"choice"},"label":"Environment","#
+    + #""nextLaunchValue":{"type":"string","value":"staging"},"#
+    + #""realValue":{"type":"string","value":"production"},"requiresRelaunch":true,"#
+    + #""section":"Network","value":{"type":"string","value":"staging"}}"#
+
+private let expiredTrial = ScenarioDescription(
+    key: "expired-trial",
+    label: "Expired trial",
+    section: "Purchases",
+    summary: "The trial ended."
+)
+
+private let expiredTrialJSON = #"{"key":"expired-trial","label":"Expired trial","#
+    + #""section":"Purchases","summary":"The trial ended."}"#
+
 /// These pin the JSON itself. The app and the bridge ship separately, so a
 /// change here is a breaking wire change that needs a `WireProtocol.version` bump.
 @Suite("Wire format")
@@ -52,6 +84,28 @@ struct WireFormatTests {
         let text = try json(WireResult.control(control: premium))
 
         #expect(text == #"{"control":{"control":\#(premiumJSON)}}"#)
+    }
+
+    @Test func aControlWithEveryOptionalFieldEncodesStably() throws {
+        #expect(try json(environment) == environmentJSON)
+    }
+
+    /// Decodes literal JSON, because a round trip would use one set of keys on
+    /// both sides and pass under any rename.
+    @Test func aControlWithEveryOptionalFieldDecodesFromItsPinnedJSON() throws {
+        let decoded = try JSONDecoder().decode(ControlDescription.self, from: Data(environmentJSON.utf8))
+
+        #expect(decoded == environment)
+    }
+
+    @Test func aScenarioWithEveryOptionalFieldEncodesStably() throws {
+        #expect(try json(expiredTrial) == expiredTrialJSON)
+    }
+
+    @Test func aScenarioWithEveryOptionalFieldDecodesFromItsPinnedJSON() throws {
+        let decoded = try JSONDecoder().decode(ScenarioDescription.self, from: Data(expiredTrialJSON.utf8))
+
+        #expect(decoded == expiredTrial)
     }
 
     @Test func descriptionResultEncodesStably() throws {

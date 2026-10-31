@@ -159,10 +159,23 @@ struct OverrideStoreTests {
 
     // MARK: - Discarding
 
-    @Test func theDiscardingStoreForgetsWhatItSaves() {
-        OverrideStore.discarding.save(.int(1), forKey: "savestate-test-key", in: .persisted)
+    @Test func aDiscardingStoreDoesNotWriteToTheSuite() {
+        OverrideStore(suiteName: scratch.suiteName, isDiscarding: true).save(.int(1), forKey: "key", in: .persisted)
 
-        #expect(OverrideStore.discarding.value(forKey: "savestate-test-key", in: .persisted) == nil)
+        #expect(scratch.store.value(forKey: "key", in: .persisted) == nil)
+    }
+
+    /// The registration domain lives in this process's memory, so this never
+    /// writes to the real `UserDefaults.standard` domain.
+    @Test func theSharedDiscardingStoreReadsNothing() throws {
+        let key = "savestate-test-\(UUID().uuidString)"
+        let stored = try JSONEncoder().encode(ControlValue.int(1))
+        UserDefaults.standard.register(defaults: [
+            OverrideStore.standard.defaultsKey(forKey: key, in: .persisted): stored
+        ])
+
+        #expect(OverrideStore.standard.value(forKey: key, in: .persisted) == .int(1))
+        #expect(OverrideStore.discarding.value(forKey: key, in: .persisted) == nil)
     }
 
     @Test func aDiscardingStoreDoesNotReadTheSuite() {

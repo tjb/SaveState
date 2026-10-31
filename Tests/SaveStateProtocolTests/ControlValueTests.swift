@@ -212,6 +212,49 @@ struct ControlValueHashingTests {
         #expect(pair[0] != pair[1])
     }
 
+    // Whole milliseconds beyond Int64 would trap on conversion without the
+    // clamp, and a NaN date would trap without the finiteness guard. A trap
+    // ends the test run, so it can't pass silently.
+
+    @Test(arguments: [1e17, -1e17])
+    func aDateBeyondTheMillisecondRangeComparesAndHashesWithoutTrapping(_ seconds: TimeInterval) {
+        let value = ControlValue.date(Date(timeIntervalSince1970: seconds))
+
+        #expect(value == value)
+        #expect(Set([value, value]).count == 1)
+    }
+
+    @Test func datesBeyondTheRangeOnOppositeSidesAreUnequal() {
+        let future = ControlValue.date(Date(timeIntervalSince1970: 1e17))
+        let past = ControlValue.date(Date(timeIntervalSince1970: -1e17))
+
+        #expect(future != past)
+    }
+
+    @Test func aNaNDateComparesAndHashesWithoutTrapping() {
+        let value = ControlValue.date(Date(timeIntervalSince1970: .nan))
+
+        #expect(value == value)
+        #expect(Set([value, value]).count == 1)
+    }
+
+    /// Without the finiteness guard, an infinite date would clamp onto the same
+    /// instant as the farthest finite date.
+    @Test(arguments: [(TimeInterval.infinity, 1e17), (-TimeInterval.infinity, -1e17)])
+    func anInfiniteDateIsUnequalToTheFarthestFiniteDate(infinite: TimeInterval, finite: TimeInterval) {
+        let infiniteDate = ControlValue.date(Date(timeIntervalSince1970: infinite))
+        let finiteDate = ControlValue.date(Date(timeIntervalSince1970: finite))
+
+        #expect(infiniteDate != finiteDate)
+    }
+
+    @Test func oppositeInfiniteDatesAreUnequal() {
+        let future = ControlValue.date(Date(timeIntervalSince1970: .infinity))
+        let past = ControlValue.date(Date(timeIntervalSince1970: -.infinity))
+
+        #expect(future != past)
+    }
+
     @Test func nanIsNotEqualToItself() {
         #expect(ControlValue.double(.nan) != .double(.nan))
     }

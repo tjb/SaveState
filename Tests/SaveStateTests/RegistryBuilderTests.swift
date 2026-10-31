@@ -228,15 +228,22 @@ private final class ModelBox {
     var model: DebugModel?
 }
 
+/// Only one branch of each `#if` compiles per configuration, so a plain
+/// `swift test` checks only the Debug half of these. The Release half guards
+/// shipped apps and runs with `swift test -c release -Xswiftc -enable-testing`.
 @Suite("Build")
 @MainActor
 struct SaveStateBuildTests {
-    @Test func isDebugMatchesTheBuildConfiguration() {
+    private static let expectedInThisBuild: Bool = {
         #if DEBUG
-        #expect(SaveStateBuild.isDebug)
+        return true
         #else
-        #expect(!SaveStateBuild.isDebug)
+        return false
         #endif
+    }()
+
+    @Test func isDebugMatchesTheBuildConfiguration() {
+        #expect(SaveStateBuild.isDebug == Self.expectedInThisBuild)
     }
 
     @Test func aRegistryIsEnabledByDefaultOnlyInDebug() {
@@ -244,7 +251,48 @@ struct SaveStateBuildTests {
 
         let registry = SaveStateRegistry(model: DebugModel(), store: scratch.store) { _ in }
 
-        #expect(registry.isEnabled == SaveStateBuild.isDebug)
+        #expect(registry.isEnabled == Self.expectedInThisBuild)
+    }
+
+    @Test func aDefaultRegistryRestoresStoredValuesOnlyInDebug() {
+        let scratch = ScratchDefaults()
+        let store = scratch.store
+        store.save(.string("Stored"), forKey: "greeting", in: .persisted)
+        let model = DebugModel()
+
+        _ = SaveStateRegistry(model: model, store: store) { r in
+            r.text("Greeting", key: "greeting", \.greeting)
+        }
+
+        #expect((model.greeting == "Stored") == Self.expectedInThisBuild)
+    }
+
+    @Test func aDefaultRegistryAcceptsChangesOnlyInDebug() {
+        let scratch = ScratchDefaults()
+        let registry = SaveStateRegistry(model: DebugModel(), store: scratch.store) { r in
+            r.text("Greeting", key: "greeting", \.greeting)
+        }
+
+        let accepted = (try? registry.set(.string("Hi"), forKey: "greeting")) != nil
+
+        #expect(accepted == Self.expectedInThisBuild)
+    }
+
+    /// The registration domain lives in this process's memory, so this reads
+    /// through `UserDefaults.standard` without writing to the real domain.
+    @Test func aRegistryUsesTheStandardStoreByDefault() throws {
+        let key = "savestate-test-\(UUID().uuidString)"
+        let stored = try JSONEncoder().encode(ControlValue.string("Stored"))
+        UserDefaults.standard.register(defaults: [
+            OverrideStore.standard.defaultsKey(forKey: key, in: .persisted): stored
+        ])
+        let model = DebugModel()
+
+        _ = SaveStateRegistry(model: model, isEnabled: true) { r in
+            r.text("Greeting", key: key, \.greeting)
+        }
+
+        #expect(model.greeting == "Stored")
     }
 }
 

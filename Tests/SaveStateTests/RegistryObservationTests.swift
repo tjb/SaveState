@@ -176,6 +176,40 @@ struct RegistryObservationTests {
         #expect(seen.withLock { $0 } == "Hi")
     }
 
+    @Test func theNotificationComesAfterAResetIsWritten() throws {
+        let model = DebugModel()
+        let registry = makeObservedRegistry(model: model)
+        try registry.set(.string("Hi"), forKey: "greeting")
+        let seen = Mutex<String?>(nil)
+        withObservationTracking {
+            _ = registry.describe()
+        } onChange: {
+            let greeting = MainActor.assumeIsolated { model.greeting }
+            seen.withLock { $0 = greeting }
+        }
+
+        try registry.reset("greeting")
+
+        #expect(seen.withLock { $0 } == "Hello")
+    }
+
+    @Test func theNotificationComesAfterAResetAllIsWritten() throws {
+        let model = DebugModel()
+        let registry = makeObservedRegistry(model: model)
+        try registry.set(.string("Hi"), forKey: "greeting")
+        let seen = Mutex<String?>(nil)
+        withObservationTracking {
+            _ = registry.describe()
+        } onChange: {
+            let greeting = MainActor.assumeIsolated { model.greeting }
+            seen.withLock { $0 = greeting }
+        }
+
+        try registry.resetAll()
+
+        #expect(seen.withLock { $0 } == "Hello")
+    }
+
     @Test func theNotificationComesAfterAnActionFinishes() async throws {
         let model = DebugModel()
         let registry = makeObservedRegistry(model: model)

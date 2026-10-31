@@ -16,6 +16,34 @@ struct RegistrySettingTests {
         #expect(model.writes == ["zulu", "alpha", "mike"])
     }
 
+    @Test func aBatchSetDoesNotPersistByDefault() throws {
+        let store = scratch.store
+        let registry = makeRegistry(model: DebugModel(), store: store)
+
+        try registry.set(["greeting": .string("Hi")])
+
+        #expect(store.value(forKey: "greeting", in: .persisted) == nil)
+    }
+
+    @Test func aSingleSetDoesNotPersistByDefault() throws {
+        let store = scratch.store
+        let registry = makeRegistry(model: DebugModel(), store: store)
+
+        try registry.set(.string("Hi"), forKey: "greeting")
+
+        #expect(store.value(forKey: "greeting", in: .persisted) == nil)
+    }
+
+    @Test func aDefaultBatchSetIsGoneAfterARelaunch() throws {
+        let store = scratch.store
+        try makeRegistry(model: DebugModel(), store: store).set(["greeting": .string("Hi")])
+        let relaunched = DebugModel()
+
+        _ = makeRegistry(model: relaunched, store: store)
+
+        #expect(relaunched.greeting == "Hello")
+    }
+
     @Test func aBadValueLeavesEveryModelValueUnchanged() {
         let model = WriteLogModel()
         let registry = makeOrderedRegistry(model: model, store: scratch.store)
@@ -403,12 +431,36 @@ struct RegistryResetTests {
         #expect(registry.changedKeys == ["greeting"])
     }
 
+    @Test func aPendingNextLaunchValueCountsAsChangedWhileTheLiveValueIsTheDefault() throws {
+        let model = DebugModel()
+        let registry = makeRegistry(model: model, store: scratch.store)
+        try registry.set(.string("staging"), forKey: "env")
+
+        model.environment = .production
+
+        #expect(registry.changedKeys == ["env"])
+    }
+
     @Test func changedKeysFollowDeclarationOrder() throws {
         let registry = makeOrderedRegistry(model: WriteLogModel(), store: scratch.store)
 
         try registry.set(["mike": .bool(true), "alpha": .bool(true), "zulu": .bool(true)])
 
         #expect(registry.changedKeys == ["zulu", "alpha", "mike"])
+    }
+
+    @Test func describeReportsEachActionsKeyLabelSectionAndDestructiveness() {
+        let registry = SaveStateRegistry(model: DebugModel(), store: scratch.store, isEnabled: true) { r in
+            r.section("Data") {
+                r.action("Erase everything", key: "erase", destructive: true) {}
+            }
+            r.action("Seed the data", key: "seed") {}
+        }
+
+        #expect(registry.describe().actions == [
+            ActionDescription(key: "erase", label: "Erase everything", section: "Data", isDestructive: true),
+            ActionDescription(key: "seed", label: "Seed the data", section: nil, isDestructive: false)
+        ])
     }
 
     @Test func describeReportsIsChanged() throws {
