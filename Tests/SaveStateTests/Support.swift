@@ -24,6 +24,29 @@ final class DebugModel {
     var actionRuns = 0
 }
 
+/// Records the order its controls are written in. Declared out of alphabetical
+/// order by `makeOrderedRegistry`, so a sort can't pass for declaration order.
+@MainActor
+final class WriteLogModel {
+    private(set) var writes: [String] = []
+    var zulu = false { didSet { writes.append("zulu") } }
+    var alpha = false { didSet { writes.append("alpha") } }
+    var mike = false { didSet { writes.append("mike") } }
+
+    func clearWrites() {
+        writes = []
+    }
+}
+
+@MainActor
+func makeOrderedRegistry(model: WriteLogModel, store: OverrideStore) -> SaveStateRegistry {
+    SaveStateRegistry(model: model, store: store, isEnabled: true) { r in
+        r.toggle("Zulu", key: "zulu", \.zulu)
+        r.toggle("Alpha", key: "alpha", \.alpha)
+        r.toggle("Mike", key: "mike", \.mike)
+    }
+}
+
 /// A `UserDefaults` suite for one test, removed when the test's suite instance
 /// goes away. Every registry in a test that shares it sees the same stored
 /// values, the way relaunches of one app do.

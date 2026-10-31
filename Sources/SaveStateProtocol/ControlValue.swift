@@ -154,6 +154,17 @@ enum DateCoding {
         return Int64(max(min(milliseconds, 9.2e18), -9.2e18))
     }
 
+    /// Whether a date formats to text that parses back to the same millisecond.
+    ///
+    /// The format has no era, so a date before year 1 reads back as a date after
+    /// it, and the formatter overflows on very distant years.
+    static func survivesRoundTrip(_ date: Date) -> Bool {
+        guard date.timeIntervalSince1970.isFinite, let parsed = self.date(from: string(from: date)) else {
+            return false
+        }
+        return milliseconds(of: parsed) == milliseconds(of: date)
+    }
+
     /// Formats a date such as `2027-01-15T08:00:00.250Z`.
     ///
     /// The milliseconds are computed here rather than by the formatter, which

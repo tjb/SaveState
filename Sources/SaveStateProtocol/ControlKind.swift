@@ -19,10 +19,11 @@ public enum ControlKind: Hashable, Sendable {
     case integer
     /// A finite decimal number. Accepts `.double`, or `.int` converted to a double.
     case decimal
-    /// A date, or no override. Accepts `.date` or `.null`.
+    /// A date, or no override. Accepts `.null`, or a `.date` that JSON can carry
+    /// unchanged, which leaves out dates before year 1 and in very distant years.
     case date
-    /// The app's clock, moved through `SaveStateClock`. Accepts `.date`, or
-    /// `.null` for real time.
+    /// The app's clock, moved through `SaveStateClock`. Accepts `.null` for real
+    /// time, or a `.date` that JSON can carry unchanged.
     case clock
 
     /// Returns `value` in the form this kind stores, or `nil` when this kind
@@ -40,7 +41,7 @@ public enum ControlKind: Hashable, Sendable {
         case (.decimal, .double(let number)):
             return number.isFinite ? value : nil
         case (.date, .date(let date)), (.clock, .date(let date)):
-            return date.timeIntervalSince1970.isFinite ? value : nil
+            return DateCoding.survivesRoundTrip(date) ? value : nil
         case (.choice(let options), .string(let option)):
             return options.contains(option) ? value : nil
         case (.decimal, .int(let number)):
