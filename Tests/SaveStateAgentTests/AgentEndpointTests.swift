@@ -183,7 +183,7 @@ private func listeningAddresses() throws -> Set<String> {
     process.waitUntilExit()
     timer.cancel()
     return Set(
-        String(bytes: data, encoding: .utf8) ?? ""
+        (String(bytes: data, encoding: .utf8) ?? "")
             .split(separator: "\n")
             .filter { $0.hasPrefix("n") }
             .map { String($0.dropFirst()) }
