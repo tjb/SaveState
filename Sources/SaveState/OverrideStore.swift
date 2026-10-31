@@ -9,6 +9,10 @@ public struct OverrideStore: Sendable {
     /// The standard `UserDefaults`, with keys prefixed `savestate.`.
     public static let standard = OverrideStore()
 
+    /// A store that keeps nothing, for controls whose model persists its own
+    /// values. Nothing is restored at launch, and `persist` has no effect.
+    public static let discarding = OverrideStore(isDiscarding: true)
+
     /// How long a stored value lasts.
     enum Slot: String, CaseIterable {
         /// Restored at every launch until reset.
@@ -19,14 +23,20 @@ public struct OverrideStore: Sendable {
 
     private let suiteName: String?
     private let prefix: String
+    private let isDiscarding: Bool
 
     /// - Parameters:
     ///   - suiteName: A `UserDefaults` suite, or `nil` for `.standard`. Use an
     ///     App Group suite to share values with extensions.
     ///   - prefix: Starts every key SaveState writes.
     public init(suiteName: String? = nil, prefix: String = "savestate.") {
+        self.init(suiteName: suiteName, prefix: prefix, isDiscarding: false)
+    }
+
+    init(suiteName: String? = nil, prefix: String = "savestate.", isDiscarding: Bool) {
         self.suiteName = suiteName
         self.prefix = prefix
+        self.isDiscarding = isDiscarding
     }
 
     private var defaults: UserDefaults {
@@ -40,6 +50,7 @@ public struct OverrideStore: Sendable {
     }
 
     func value(forKey key: String, in slot: Slot) -> ControlValue? {
+        guard !isDiscarding else { return nil }
         let defaultsKey = defaultsKey(forKey: key, in: slot)
         guard let data = defaults.data(forKey: defaultsKey) else { return nil }
         guard let value = try? JSONDecoder().decode(ControlValue.self, from: data) else {
@@ -50,11 +61,13 @@ public struct OverrideStore: Sendable {
     }
 
     func save(_ value: ControlValue, forKey key: String, in slot: Slot) {
+        guard !isDiscarding else { return }
         guard let data = try? JSONEncoder().encode(value) else { return }
         defaults.set(data, forKey: defaultsKey(forKey: key, in: slot))
     }
 
     func remove(forKey key: String, in slot: Slot) {
+        guard !isDiscarding else { return }
         defaults.removeObject(forKey: defaultsKey(forKey: key, in: slot))
     }
 

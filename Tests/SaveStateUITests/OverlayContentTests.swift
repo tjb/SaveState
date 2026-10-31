@@ -45,7 +45,7 @@ struct OverlayContentTests {
 
 @Suite("Control text")
 struct ControlTextTests {
-    private let us = Locale(identifier: "en_US")
+    private let american = Locale(identifier: "en_US")
     private let germany = Locale(identifier: "de_DE")
 
     @Test func integersParseWholeNumbersOnly() {
@@ -56,22 +56,22 @@ struct ControlTextTests {
     }
 
     @Test func decimalsFollowTheLocale() {
-        #expect(ControlText.value(from: "-1.5", kind: .decimal, locale: us) == .double(-1.5))
+        #expect(ControlText.value(from: "-1.5", kind: .decimal, locale: american) == .double(-1.5))
         #expect(ControlText.value(from: "1,5", kind: .decimal, locale: germany) == .double(1.5))
         #expect(ControlText.text(for: .double(1.5), locale: germany) == "1,5")
     }
 
     @Test func decimalsRejectWhatIsNotAFiniteNumber() {
-        #expect(ControlText.value(from: "12abc", kind: .decimal, locale: us) == nil)
-        #expect(ControlText.value(from: "", kind: .decimal, locale: us) == nil)
-        #expect(ControlText.value(from: "∞", kind: .decimal, locale: us) == nil)
-        #expect(ControlText.value(from: "NaN", kind: .decimal, locale: us) == nil)
+        #expect(ControlText.value(from: "12abc", kind: .decimal, locale: american) == nil)
+        #expect(ControlText.value(from: "", kind: .decimal, locale: american) == nil)
+        #expect(ControlText.value(from: "∞", kind: .decimal, locale: american) == nil)
+        #expect(ControlText.value(from: "NaN", kind: .decimal, locale: american) == nil)
     }
 
     @Test func decimalsRoundTripTheirDisplayedText() {
         for number in [0.0, 0.15, -3.25, 1234567.5] {
-            let text = ControlText.text(for: .double(number), locale: us)
-            #expect(ControlText.value(from: text, kind: .decimal, locale: us) == .double(number))
+            let text = ControlText.text(for: .double(number), locale: american)
+            #expect(ControlText.value(from: text, kind: .decimal, locale: american) == .double(number))
         }
     }
 
