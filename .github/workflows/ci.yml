@@ -1,0 +1,73 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  package:
+    name: Package (macOS)
+    runs-on: macos-26
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - run: xcodebuild -version
+      - name: Build
+        run: swift build
+      - name: Test
+        run: swift test
+
+  ios:
+    name: Package (iOS)
+    runs-on: macos-26
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - run: xcodebuild -version
+      - name: List schemes
+        run: xcodebuild -list
+      - name: Build for iOS Simulator (Debug)
+        run: |
+          xcodebuild build \
+            -scheme SaveState-Package \
+            -destination 'generic/platform=iOS Simulator'
+      - name: Build for iOS Simulator (Release)
+        run: |
+          xcodebuild build \
+            -scheme SaveState-Package \
+            -configuration Release \
+            -destination 'generic/platform=iOS Simulator'
+
+  cli:
+    name: CLI (macOS)
+    runs-on: macos-26
+    timeout-minutes: 20
+    defaults:
+      run:
+        working-directory: CLI
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build
+        run: swift build
+      - name: Test
+        run: swift test
+      - name: MCP smoke test
+        run: |
+          init='{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-06-18","capabilities":{},"clientInfo":{"name":"ci","version":"0"}}}'
+          out="$(mktemp)"
+          { printf '%s\n' "$init"; sleep 3; } | .build/debug/savestate mcp > "$out" &
+          pid=$!
+          sleep 8
+          kill "$pid" 2>/dev/null || true
+          echo "--- server output"
+          cat "$out"
+          grep -q '"serverInfo"' "$out"
