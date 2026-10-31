@@ -34,6 +34,15 @@ private let sampleApp = DiscoveredApp(
     deviceIdentifier: "DEVICE"
 )
 
+/// Whether `Bridge.serve` has returned.
+private actor ServingFinished {
+    private(set) var value = false
+
+    func record() {
+        value = true
+    }
+}
+
 /// Drives the server the way a coding agent does: a real MCP client, over the SDK's
 /// in-memory transport, so requests and results pass through JSON-RPC encoding.
 @Suite("MCP server")
@@ -169,6 +178,24 @@ struct BridgeServerTests {
     }
 
     // MARK: - Lifetime
+
+    @Test(.timeLimit(.minutes(1))) func servingLastsWhileTheClientIsConnected() async throws {
+        let (clientSide, serverSide) = await InMemoryTransport.createConnectedPair()
+        let finished = ServingFinished()
+        let serving = Task {
+            try await Bridge.serve(tools: BridgeTools { [] }, over: serverSide)
+            await finished.record()
+        }
+        let client = Client(name: "test", version: "1")
+        _ = try await client.connect(transport: clientSide)
+        _ = try await client.listTools()
+
+        // A whole request has gone both ways, so a serve that didn't wait is done.
+        #expect(await finished.value == false)
+
+        await client.disconnect()
+        _ = await serving.result
+    }
 
     @Test(.timeLimit(.minutes(1))) func servingEndsWhenTheClientDisconnects() async throws {
         let (clientSide, serverSide) = await InMemoryTransport.createConnectedPair()

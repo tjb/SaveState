@@ -164,6 +164,86 @@ private func canConnect(host: String, port: UInt16) -> Bool {
     }
 }
 
+#if os(macOS)
+/// The TCP addresses this process listens on, such as `127.0.0.1:8080`, as the
+/// system reports them. This sees the bound socket itself, so it doesn't depend on
+/// which network interfaces the machine has. Bounded, so a stuck `lsof` fails the
+/// test rather than hanging it.
+private func listeningAddresses() throws -> Set<String> {
+    let process = Process()
+    process.executableURL = URL(fileURLWithPath: "/usr/sbin/lsof")
+    process.arguments = ["-nP", "-a", "-p", "\(ProcessInfo.processInfo.processIdentifier)", "-iTCP", "-sTCP:LISTEN", "-Fn"]
+    let output = Pipe()
+    process.standardOutput = output
+    process.standardError = FileHandle.nullDevice
+    try process.run()
+    let timer = DispatchWorkItem { process.terminate() }
+    DispatchQueue.global().asyncAfter(deadline: .now() + 10, execute: timer)
+    let data = output.fileHandleForReading.readDataToEndOfFile()
+    process.waitUntilExit()
+    timer.cancel()
+    return Set(
+        String(bytes: data, encoding: .utf8) ?? ""
+            .split(separator: "\n")
+            .filter { $0.hasPrefix("n") }
+            .map { String($0.dropFirst()) }
+    )
+}
+#endif
+
+/// This Mac's first non-loopback IPv4 address, if it has one.
+private func nonLoopbackAddress() -> String? {
+    var first: UnsafeMutablePointer<ifaddrs>?
+    guard getifaddrs(&first) == 0 else { return nil }
+    defer { freeifaddrs(first) }
+    var next = first
+    while let current = next {
+        defer { next = current.pointee.ifa_next }
+        guard let address = current.pointee.ifa_addr,
+              address.pointee.sa_family == sa_family_t(AF_INET),
+              current.pointee.ifa_flags & UInt32(IFF_LOOPBACK) == 0,
+              current.pointee.ifa_flags & UInt32(IFF_UP) != 0
+        else { continue }
+        var host = [CChar](repeating: 0, count: Int(NI_MAXHOST))
+        guard getnameinfo(address, socklen_t(address.pointee.sa_len), &host, socklen_t(host.count), nil, 0, NI_NUMERICHOST) == 0 else {
+            continue
+        }
+        return String(bytes: host.prefix { $0 != 0 }.map { UInt8(bitPattern: $0) }, encoding: .utf8)
+    }
+    return nil
+}
+
+/// Ways a presented token can differ from the real one.
+private enum WrongToken: String, CaseIterable, CustomTestStringConvertible {
+    case empty
+    case missingLastCharacter
+    case oneCharacterTooLong
+    case wrongFirstCharacter
+    case wrongMiddleCharacter
+    case wrongLastCharacter
+
+    var testDescription: String { rawValue }
+
+    func applied(to token: String) -> String {
+        func changed(_ character: Character) -> String { character == "0" ? "1" : "0" }
+        let middle = token.index(token.startIndex, offsetBy: token.count / 2)
+        switch self {
+        case .empty:
+            return ""
+        case .missingLastCharacter:
+            return String(token.dropLast())
+        case .oneCharacterTooLong:
+            return token + "0"
+        case .wrongFirstCharacter:
+            return changed(token[token.startIndex]) + token.dropFirst()
+        case .wrongMiddleCharacter:
+            return token[..<middle] + changed(token[middle]) + token[token.index(after: middle)...]
+        case .wrongLastCharacter:
+            return token.dropLast() + changed(token[token.index(before: token.endIndex)])
+        }
+    }
+}
+
 @Suite("Agent endpoint", .serialized)
 @MainActor
 struct AgentEndpointTests {
@@ -224,6 +304,15 @@ struct AgentEndpointTests {
 
         let attributes = try FileManager.default.attributesOfItem(atPath: url.path)
         #expect((attributes[.posixPermissions] as? NSNumber)?.intValue == 0o600)
+    }
+
+    @Test func theEndpointFilesDirectoryIsPrivate() async throws {
+        let endpoint = try await start()
+        defer { endpoint.stop() }
+
+        let folder = scratch.container.appendingPathComponent(EndpointInfo.relativePath).deletingLastPathComponent()
+        let attributes = try FileManager.default.attributesOfItem(atPath: folder.path)
+        #expect((attributes[.posixPermissions] as? NSNumber)?.intValue == 0o700)
     }
 
     @Test func stopRemovesTheFileAndRefusesConnections() async throws {
@@ -297,6 +386,28 @@ struct AgentEndpointTests {
         #expect(canConnect(host: "127.0.0.1", port: endpoint.info.port))
     }
 
+    #if os(macOS)
+    @Test func aFailedWriteLeavesNothingListening() async throws {
+        let notADirectory = scratch.container.appendingPathComponent("file")
+        try FileManager.default.createDirectory(at: scratch.container, withIntermediateDirectories: true)
+        try Data().write(to: notADirectory)
+        let before = try listeningAddresses()
+
+        await #expect(throws: (any Error).self) {
+            try await AgentEndpoint.start(registry: makeRegistry(), container: notADirectory)
+        }
+
+        // The cancelled listener closes its socket on its own schedule.
+        let deadline = ContinuousClock.now + .seconds(2)
+        var added = try listeningAddresses().subtracting(before)
+        while !added.isEmpty, ContinuousClock.now < deadline {
+            try await Task.sleep(for: .milliseconds(50))
+            added = try listeningAddresses().subtracting(before)
+        }
+        #expect(added.isEmpty)
+    }
+    #endif
+
     @Test func aContainerItCantCreateTheFileInThrowsTheWriteError() async throws {
         // The directory exists but is read-only, so only creating the file can fail.
         let folder = scratch.container
@@ -322,6 +433,19 @@ struct AgentEndpointTests {
 
         let info = try JSONDecoder().decode(EndpointInfo.self, from: Data(contentsOf: url))
         #expect(info == endpoint.info)
+    }
+
+    @Test func aStaleWorldReadableFileDoesNotKeepItsPermissions() async throws {
+        let url = scratch.container.appendingPathComponent(EndpointInfo.relativePath)
+        let manager = FileManager.default
+        try manager.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
+        #expect(manager.createFile(atPath: url.path, contents: Data("stale".utf8), attributes: [.posixPermissions: 0o644]))
+
+        let endpoint = try await start()
+        defer { endpoint.stop() }
+
+        let attributes = try manager.attributesOfItem(atPath: url.path)
+        #expect((attributes[.posixPermissions] as? NSNumber)?.intValue == 0o600)
     }
 
     @Test func stoppingTwiceLeavesALaterEndpointsFile() async throws {
@@ -420,12 +544,13 @@ struct AgentEndpointTests {
         #expect(error.code == .protocolMismatch)
     }
 
-    @Test func aTokenOfTheRightLengthWithOneWrongCharacterIsRejected() async throws {
+    @Test(arguments: WrongToken.allCases)
+    private func aTokenThatDiffersAnywhereIsRejected(_ wrongToken: WrongToken) async throws {
         let endpoint = try await start()
         defer { endpoint.stop() }
         let client = try Client(port: endpoint.info.port)
-        let token = endpoint.info.token
-        let wrong = String(token.dropLast()) + (token.hasSuffix("0") ? "1" : "0")
+        let wrong = wrongToken.applied(to: endpoint.info.token)
+        #expect(wrong != endpoint.info.token)
 
         try await client.send(ClientHello(protocolVersion: WireProtocol.version, token: wrong))
 
@@ -434,6 +559,17 @@ struct AgentEndpointTests {
             return
         }
         #expect(error.code == .unauthorized)
+    }
+
+    @Test func anAuthenticatedClientOutlivesTheHelloTimeout() async throws {
+        let endpoint = try await start()
+        defer { endpoint.stop() }
+        let client = try await connect(endpoint)
+
+        // Longer than the endpoint's 5 second hello timeout.
+        try await Task.sleep(for: .seconds(6))
+
+        #expect(try await perform(.runAction(key: "run"), on: client) == .done)
     }
 
     @Test func aHelloInABinaryFrameIsAccepted() async throws {
@@ -719,36 +855,27 @@ struct AgentEndpointTests {
 
     // MARK: - Network exposure
 
-    @Test func onlyListensOnLoopback() async throws {
+    #if os(macOS)
+    @Test func theListeningSocketIsBoundToLoopbackOnly() async throws {
+        let endpoint = try await start()
+        defer { endpoint.stop() }
+        let port = endpoint.info.port
+
+        let addresses = try listeningAddresses().filter { $0.hasSuffix(":\(port)") }
+
+        #expect(addresses == ["127.0.0.1:\(port)"])
+    }
+    #endif
+
+    /// Disabled, so reported as skipped, on a machine with no other interface.
+    @Test(.enabled(if: nonLoopbackAddress() != nil))
+    func theEndpointCantBeReachedFromAnotherInterface() async throws {
+        let address = try #require(nonLoopbackAddress())
         let endpoint = try await start()
         defer { endpoint.stop() }
         #expect(canConnect(host: "127.0.0.1", port: endpoint.info.port))
-        // A machine with no other interface has nothing to check.
-        guard let address = Self.nonLoopbackAddress() else { return }
 
         #expect(!canConnect(host: address, port: endpoint.info.port))
-    }
-
-    /// This Mac's first non-loopback IPv4 address, if it has one.
-    private static func nonLoopbackAddress() -> String? {
-        var first: UnsafeMutablePointer<ifaddrs>?
-        guard getifaddrs(&first) == 0 else { return nil }
-        defer { freeifaddrs(first) }
-        var next = first
-        while let current = next {
-            defer { next = current.pointee.ifa_next }
-            guard let address = current.pointee.ifa_addr,
-                  address.pointee.sa_family == sa_family_t(AF_INET),
-                  current.pointee.ifa_flags & UInt32(IFF_LOOPBACK) == 0,
-                  current.pointee.ifa_flags & UInt32(IFF_UP) != 0
-            else { continue }
-            var host = [CChar](repeating: 0, count: Int(NI_MAXHOST))
-            guard getnameinfo(address, socklen_t(address.pointee.sa_len), &host, socklen_t(host.count), nil, 0, NI_NUMERICHOST) == 0 else {
-                continue
-            }
-            return String(bytes: host.prefix { $0 != 0 }.map { UInt8(bitPattern: $0) }, encoding: .utf8)
-        }
-        return nil
     }
 }
 #endif
