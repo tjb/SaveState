@@ -30,10 +30,20 @@ private final class SampleManager: PremiumStatusProvider {
     }
 }
 
+/// A `UserDefaults` suite for one test, removed when the test ends.
+private final class ScratchSuite: Sendable {
+    let name = "SaveStateUITests.\(UUID().uuidString)"
+
+    deinit {
+        UserDefaults.standard.removePersistentDomain(forName: name)
+    }
+}
+
 @Suite("PremiumToggle shim")
 @MainActor
 struct PremiumToggleShimTests {
-    private let suiteName = "SaveStateUITests.\(UUID().uuidString)"
+    private let scratch = ScratchSuite()
+    private var suiteName: String { scratch.name }
     private var storage: PremiumDebugOverride { PremiumDebugOverride(suiteName: suiteName) }
 
     private func premium(_ registry: SaveStateRegistry) throws -> ControlDescription {

@@ -8,13 +8,18 @@ final class DemoPremiumManager: PremiumStatusProvider {
     var isPremium: Bool { debugOverride ?? false }
     private(set) var debugOverride: Bool?
 
+    let allowsDebugOverride: Bool
     private let storage = PremiumDebugOverride()
 
-    init() {
-        debugOverride = storage.value
+    init(allowsDebugOverride: Bool) {
+        self.allowsDebugOverride = allowsDebugOverride
+        if allowsDebugOverride {
+            debugOverride = storage.value
+        }
     }
 
     func setDebugOverride(_ value: Bool?) {
+        guard allowsDebugOverride else { return }
         storage.value = value
         debugOverride = value
     }

@@ -82,7 +82,8 @@ It shows nothing when the registry is disabled. Destructive actions ask first.
 `SaveStateUI` includes PremiumToggle's API, so an existing
 `.premiumToggle(manager)` keeps working after you change the import. Your
 provider still owns the override and stores it under the same key, so existing
-overrides carry over. Accessibility identifiers inside the panel are SaveState's.
+overrides carry over. The panel is SaveState's, so it offers On, Off, and Real,
+and its accessibility identifiers change. `premiumToggle.button` stays the same.
 
 ### Time travel
 

@@ -35,6 +35,8 @@ jobs:
       - name: Lint
         run: |
           "$RUNNER_TEMP/swiftlint/swiftlint" lint --strict --reporter github-actions-logging
+      - name: Check that the custom rules fire
+        run: bash .github/scripts/check-lint-rules.sh "$RUNNER_TEMP/swiftlint/swiftlint"
 
   package:
     name: Package (macOS)
@@ -75,6 +77,28 @@ jobs:
             -configuration Release \
             -destination 'generic/platform=iOS Simulator' 2>&1 | tee build-release.log; status=${PIPESTATUS[0]}
           bash "$GITHUB_WORKSPACE/.github/scripts/annotate-errors.sh" build-release.log
+          exit "$status"
+
+  demo:
+    name: Demo (iOS)
+    runs-on: macos-26
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@v5
+      - run: xcodebuild -version
+      - name: Test the demo in the simulator
+        run: |
+          udid="$(xcrun simctl list devices available -j | python3 -c "
+          import json, sys
+          runtimes = json.load(sys.stdin)['devices']
+          ios = sorted((k for k in runtimes if 'iOS' in k), reverse=True)
+          print(next(d['udid'] for k in ios for d in runtimes[k] if d['name'].startswith('iPhone')))
+          ")"
+          xcodebuild test \
+            -project Examples/SaveStateDemo/SaveStateDemo.xcodeproj \
+            -scheme SaveStateDemo \
+            -destination "id=$udid" 2>&1 | tee demo.log; status=${PIPESTATUS[0]}
+          bash "$GITHUB_WORKSPACE/.github/scripts/annotate-errors.sh" demo.log
           exit "$status"
 
   cli:

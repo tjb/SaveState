@@ -426,14 +426,25 @@ struct RegistryTests {
         #expect(registry.changedKeys.isEmpty)
     }
 
-    @Test func aDiscardingStoreRestoresNothing() throws {
-        let registry = makeRegistry(model: DebugModel(), store: .discarding)
-        try registry.set(.bool(true), forKey: "onboarding", persist: true)
-        #expect(registry.describe().controls.first { $0.key == "onboarding" }?.nextLaunchValue == nil)
+    @Test func aDiscardingStoreLeavesTheBackingStoreAlone() throws {
+        let store = scratch.store
+        let discarding = OverrideStore(suiteName: scratch.suiteName, isDiscarding: true)
+        store.save(.bool(true), forKey: "seeded", in: .persisted)
+        let key = store.defaultsKey(forKey: "onboarding", in: .persisted)
+        let defaults = try #require(UserDefaults(suiteName: scratch.suiteName))
 
         let model = DebugModel()
-        _ = makeRegistry(model: model, store: .discarding)
+        let registry = SaveStateRegistry(model: model, store: discarding, isEnabled: true) { r in
+            r.toggle("Show onboarding", key: "onboarding", \.showsOnboarding)
+            r.toggle("Seeded", key: "seeded", \.isEntitled)
+        }
+        #expect(!model.isEntitled, "Nothing is restored from a discarding store")
 
-        #expect(!model.showsOnboarding)
+        try registry.set(.bool(true), forKey: "onboarding", persist: true)
+        #expect(defaults.object(forKey: key) == nil, "Writes aren't kept")
+        #expect(registry.describe().controls.first { $0.key == "onboarding" }?.nextLaunchValue == nil)
+
+        try registry.reset("seeded")
+        #expect(store.value(forKey: "seeded", in: .persisted) == .bool(true), "Resets remove nothing")
     }
 }

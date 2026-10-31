@@ -27,7 +27,7 @@ custom_rules:
     name: "No networking outside SaveStateAgent"
     message: "SaveState and SaveStateUI link into Release builds. Networking belongs in SaveStateAgent, inside #if DEBUG."
     included: "Sources/(SaveState|SaveStateUI)/"
-    regex: '\b(URLSession|URLRequest|NWConnection|NWListener|NWBrowser|CFSocket|CFStream)\b|\bimport\s+(class\s+|struct\s+|enum\s+)?Network\b'
+    regex: '\b(NS)?URL(Session|Connection)\w*|\bURLRequest\b|\bNW[A-Z]\w*|\bCF(Read|Write)?(Socket|Stream)\w*|\bgetStreamsToHost\b|\bsocket\(|\bimport\s+((class|struct|enum|func)\s+)?(Network|CFNetwork)\b'
     excluded_match_kinds:
       - comment
       - doccomment
@@ -37,7 +37,7 @@ custom_rules:
     name: "Read time through SaveStateClock"
     message: "Read SaveStateClock.now so the clock control can move this. The demo is the adoption path people copy."
     included: "Examples/"
-    regex: '\bDate\(\)'
+    regex: '\bDate(\.init)?\(\)|\bDate\.now\b'
     excluded_match_kinds:
       - comment
       - doccomment

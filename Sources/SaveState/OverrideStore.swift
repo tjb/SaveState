@@ -33,7 +33,7 @@ public struct OverrideStore: Sendable {
         self.init(suiteName: suiteName, prefix: prefix, isDiscarding: false)
     }
 
-    private init(suiteName: String? = nil, prefix: String = "savestate.", isDiscarding: Bool) {
+    init(suiteName: String? = nil, prefix: String = "savestate.", isDiscarding: Bool) {
         self.suiteName = suiteName
         self.prefix = prefix
         self.isDiscarding = isDiscarding

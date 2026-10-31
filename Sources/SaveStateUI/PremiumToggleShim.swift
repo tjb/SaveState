@@ -4,7 +4,8 @@ import SaveState
 import SwiftUI
 
 // PremiumToggle's public API on top of SaveState, so existing apps keep their
-// `.premiumToggle(manager)` call. Names and behavior match PremiumToggle 1.x.
+// `.premiumToggle(manager)` call. Names match PremiumToggle 1.x. The panel is
+// SaveState's, so it offers On, Off, and Real instead of a toggle and a button.
 //
 // The provider stays the only owner of the override. It persists the value
 // itself, so the registry behind the panel stores nothing.
@@ -168,11 +169,16 @@ private struct PremiumToggleButton<Provider: PremiumStatusProvider>: View {
     @ViewBuilder
     private var panel: some View {
         if provider.allowsDebugOverride {
-            SaveStatePanel(registry: registry)
+            VStack(alignment: .leading, spacing: 0) {
+                status
+                    .padding([.horizontal, .top])
+                SaveStatePanel(registry: registry)
+            }
         } else {
             VStack(alignment: .leading, spacing: 12) {
                 Text("Debug Panel")
                     .font(.headline)
+                status
                 Label("Overrides disabled in this build", systemImage: "lock")
                     .font(.footnote)
                     .foregroundStyle(.secondary)
@@ -182,6 +188,18 @@ private struct PremiumToggleButton<Provider: PremiumStatusProvider>: View {
             .padding()
             .frame(minWidth: 240, alignment: .leading)
         }
+    }
+
+    /// The status the app acts on. The registry can't report it as a real value,
+    /// because `isPremium` includes any override.
+    private var status: some View {
+        Label(
+            provider.isPremium ? "Premium is on" : "Premium is off",
+            systemImage: provider.isPremium ? "crown.fill" : "crown"
+        )
+        .font(.footnote)
+        .accessibilityElement(children: .combine)
+        .accessibilityIdentifier("premiumToggle.status")
     }
 }
 

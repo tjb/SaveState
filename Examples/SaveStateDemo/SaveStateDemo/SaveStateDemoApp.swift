@@ -6,7 +6,11 @@ import SwiftUI
 struct SaveStateDemoApp: App {
     @State private var state: DemoState
     @State private var registry: SaveStateRegistry
-    @State private var premiumManager = DemoPremiumManager()
+    @State private var premiumManager = DemoPremiumManager(
+        allowsDebugOverride: !Self.launchArguments.contains("-premiumToggleBlocked")
+    )
+
+    private static let launchArguments = ProcessInfo.processInfo.arguments
 
     init() {
         let state = DemoState()
@@ -16,10 +20,10 @@ struct SaveStateDemoApp: App {
 
     var body: some Scene {
         WindowGroup {
-            // UI tests pass this to exercise the PremiumToggle shim on its own.
-            if ProcessInfo.processInfo.arguments.contains("-premiumToggleShim") {
+            // UI tests pass these to exercise the PremiumToggle shim on its own.
+            if Self.launchArguments.contains("-premiumToggleShim") {
                 DemoContentView(state: state)
-                    .premiumToggle(premiumManager)
+                    .premiumToggle(premiumManager, isEnabled: !Self.launchArguments.contains("-premiumToggleHidden"))
             } else {
                 DemoContentView(state: state)
                     .saveStateOverlay(registry)
