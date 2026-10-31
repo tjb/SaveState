@@ -1,4 +1,5 @@
 import Foundation
+import Observation
 import SaveStateProtocol
 
 /// The registry of an app's debug state: its controls, actions, and scenarios.
@@ -16,7 +17,11 @@ import SaveStateProtocol
 ///     r.action("Reset onboarding", key: "reset-onboarding", destructive: true) {
 ///         onboarding.reset()
 ///     }
-///     r.scenario("expired-trial", "Trial ended yesterday; the paywall shows") { state in
+///     r.scenario(
+///         "Expired trial",
+///         key: "expired-trial",
+///         summary: "The trial ended yesterday, so the paywall shows."
+///     ) { state in
 ///         state.premiumOverride = false
 ///         SaveStateClock.overrideDate = .now.addingTimeInterval(8 * 86_400)
 ///     }
@@ -24,10 +29,12 @@ import SaveStateProtocol
 /// ```
 ///
 /// The overlay, the agent endpoint, UI test launch arguments, and previews all
-/// read and change state through the registry.
+/// read and change state through the registry. It is observable: SwiftUI views
+/// that read it update after every change made through it.
 @MainActor
+@Observable
 public final class SaveStateRegistry {
-    /// Whether the registry accepts changes. When `false`, persisted values
+    /// Whether the registry accepts changes. When `false`, stored values
     /// aren't restored and every change throws `SaveStateError.disabled`.
     public let isEnabled: Bool
 
@@ -36,12 +43,16 @@ public final class SaveStateRegistry {
     private let actions: [RegisteredAction]
     private let scenarios: [RegisteredScenario]
 
-    /// Creates a registry and restores persisted values into the model.
+    /// Bumped after every change made through the registry, so observers of
+    /// anything that reads it are notified.
+    private var revision = 0
+
+    /// Creates a registry and restores stored values into the model.
     ///
     /// - Parameters:
     ///   - model: The object your controls bind to, usually a `@MainActor`
     ///     `@Observable` class holding debug state.
-    ///   - store: Where persisted values live.
+    ///   - store: Where values that outlast a launch live.
     ///   - isEnabled: Defaults to `true` only in Debug builds. Pass your own
     ///     flag for QA or TestFlight builds.
     ///   - declare: Declares the controls, actions, and scenarios.
@@ -59,7 +70,7 @@ public final class SaveStateRegistry {
         actions = builder.actions
         scenarios = builder.scenarios
         if isEnabled {
-            restorePersistedValues()
+            restoreStoredValues()
         }
     }
 
@@ -68,7 +79,8 @@ public final class SaveStateRegistry {
     /// A snapshot of every control with its current values, every action, and
     /// every scenario.
     public func describe() -> RegistryDescription {
-        RegistryDescription(
+        observeChanges()
+        return RegistryDescription(
             controls: controls.map { controlDescription(of: $0) },
             actions: actions.map { action in
                 ActionDescription(
@@ -79,7 +91,12 @@ public final class SaveStateRegistry {
                 )
             },
             scenarios: scenarios.map { scenario in
-                ScenarioDescription(key: scenario.key, summary: scenario.summary)
+                ScenarioDescription(
+                    key: scenario.key,
+                    label: scenario.label,
+                    section: scenario.section,
+                    summary: scenario.summary
+                )
             }
         )
     }
@@ -87,87 +104,116 @@ public final class SaveStateRegistry {
     /// The control's own value: the override for optional controls, otherwise
     /// the setting.
     public func value(forKey key: String) throws -> ControlValue {
-        try control(forKey: key).binding.read()
+        observeChanges()
+        return try control(forKey: key).binding.read()
     }
 
     /// The value the app should act on: the real value when an optional
     /// control has no override.
     public func effectiveValue(forKey key: String) throws -> ControlValue {
-        effectiveValue(of: try control(forKey: key))
+        observeChanges()
+        return effectiveValue(of: try control(forKey: key))
     }
 
     /// The keys of controls whose value differs from the value they had when
-    /// the registry was created.
+    /// the registry was created, in declaration order.
     public var changedKeys: [String] {
-        controls.filter { $0.binding.read() != $0.defaultValue }.map { $0.key }
+        observeChanges()
+        return controls.filter { $0.binding.read() != $0.defaultValue }.map { $0.key }
     }
 
     // MARK: - Changing
 
     /// Sets one control.
     ///
-    /// - Parameter persist: Keeps the value across relaunches. Agent writes
-    ///   default to `false`, so a relaunch clears them. A value persisted
-    ///   earlier stays stored and returns on relaunch until you reset the
-    ///   control or persist a new value.
+    /// - Parameter persist: Keeps the value across relaunches until you reset
+    ///   the control. When `false`, the value lasts for this launch, except on
+    ///   a control that requires a relaunch: there it lasts through the next
+    ///   launch, so relaunching applies it once. Either way, a value persisted
+    ///   earlier returns at later launches.
     public func set(_ value: ControlValue, forKey key: String, persist: Bool = false) throws {
         try set([key: value], persist: persist)
     }
 
-    /// Sets several controls at once. Every key and value is checked before
-    /// any is written, so one bad entry leaves every control unchanged.
+    /// Sets several controls at once.
+    ///
+    /// Every key and value is checked before any is written, so one bad entry
+    /// leaves every control unchanged. Values are written in declaration order.
+    ///
+    /// - Parameter persist: Applies to every value, as in `set(_:forKey:persist:)`.
     public func set(_ values: [String: ControlValue], persist: Bool = false) throws {
         guard isEnabled else { throw SaveStateError.disabled }
+        let unknownKeys = values.keys.filter { key in !controls.contains { $0.key == key } }
+        if let unknownKey = unknownKeys.min() {
+            throw SaveStateError.unknownControl(unknownKey)
+        }
         var pending: [(control: Control, value: ControlValue)] = []
-        for (key, value) in values {
-            let control = try self.control(forKey: key)
+        for control in controls {
+            guard let value = values[control.key] else { continue }
             guard let normalized = control.kind.normalize(value) else {
-                throw SaveStateError.invalidValue(key: key, value: value, kind: control.kind)
+                throw SaveStateError.invalidValue(key: control.key, value: value, kind: control.kind)
             }
             pending.append((control: control, value: normalized))
         }
+        defer { revision += 1 }
         for change in pending {
             change.control.binding.write(change.value)
-            if persist {
-                store.save(change.value, forKey: change.control.key)
-            }
+            storeValue(change.value, for: change.control, persist: persist)
         }
     }
 
     /// Returns a control to the value it had when the registry was created and
-    /// forgets any persisted value.
+    /// forgets any stored value.
     public func reset(_ key: String) throws {
         guard isEnabled else { throw SaveStateError.disabled }
-        restoreDefault(of: try control(forKey: key))
+        let control = try self.control(forKey: key)
+        defer { revision += 1 }
+        restoreDefault(of: control)
     }
 
     /// Resets every control.
     public func resetAll() throws {
         guard isEnabled else { throw SaveStateError.disabled }
+        defer { revision += 1 }
         for control in controls {
             restoreDefault(of: control)
         }
     }
 
     /// Runs an action.
-    public func runAction(_ key: String) async throws {
+    ///
+    /// - Parameter allowDestructive: Pass `true` to run an action declared
+    ///   `destructive`, after a person has confirmed it. Otherwise those
+    ///   actions throw `SaveStateError.destructiveActionNotAllowed`.
+    public func runAction(_ key: String, allowDestructive: Bool = false) async throws {
         guard isEnabled else { throw SaveStateError.disabled }
         guard let action = actions.first(where: { $0.key == key }) else {
             throw SaveStateError.unknownAction(key)
         }
+        guard allowDestructive || !action.isDestructive else {
+            throw SaveStateError.destructiveActionNotAllowed(key)
+        }
+        defer { revision += 1 }
         try await action.perform()
     }
 
     /// Applies a scenario.
+    ///
+    /// Changes the scenario makes to the model directly last for this launch.
     public func applyScenario(_ key: String) async throws {
         guard isEnabled else { throw SaveStateError.disabled }
         guard let scenario = scenarios.first(where: { $0.key == key }) else {
             throw SaveStateError.unknownScenario(key)
         }
+        defer { revision += 1 }
         try await scenario.runner.run()
     }
 
     // MARK: - Private
+
+    private func observeChanges() {
+        _ = revision
+    }
 
     private func control(forKey key: String) throws -> Control {
         guard let control = controls.first(where: { $0.key == key }) else {
@@ -177,6 +223,9 @@ public final class SaveStateRegistry {
     }
 
     private func effectiveValue(of control: Control) -> ControlValue {
+        if let readEffective = control.readEffective {
+            return readEffective()
+        }
         let value = control.binding.read()
         if value == .null, let realValue = control.readReal?() {
             return realValue
@@ -194,22 +243,43 @@ public final class SaveStateRegistry {
             realValue: control.readReal?(),
             effectiveValue: effectiveValue(of: control),
             defaultValue: control.defaultValue,
-            requiresRelaunch: control.requiresRelaunch
+            requiresRelaunch: control.requiresRelaunch,
+            nextLaunchValue: store.value(forKey: control.key, in: .nextLaunch)
+                ?? store.value(forKey: control.key, in: .persisted)
         )
+    }
+
+    private func storeValue(_ value: ControlValue, for control: Control, persist: Bool) {
+        if persist {
+            store.save(value, forKey: control.key, in: .persisted)
+            store.remove(forKey: control.key, in: .nextLaunch)
+        } else if control.requiresRelaunch {
+            store.save(value, forKey: control.key, in: .nextLaunch)
+        }
     }
 
     private func restoreDefault(of control: Control) {
         control.binding.write(control.defaultValue)
-        store.remove(forKey: control.key)
+        store.removeAll(forKey: control.key)
     }
 
-    private func restorePersistedValues() {
+    /// Applies each control's stored value: a next-launch value once, which
+    /// this consumes, otherwise the persisted value. Values the control no
+    /// longer accepts, such as a removed choice, are dropped.
+    private func restoreStoredValues() {
         for control in controls {
-            guard let stored = store.load(forKey: control.key) else { continue }
-            if let value = control.kind.normalize(stored) {
-                control.binding.write(value)
+            if let value = store.value(forKey: control.key, in: .nextLaunch) {
+                store.remove(forKey: control.key, in: .nextLaunch)
+                if let normalized = control.kind.normalize(value) {
+                    control.binding.write(normalized)
+                    continue
+                }
+            }
+            guard let value = store.value(forKey: control.key, in: .persisted) else { continue }
+            if let normalized = control.kind.normalize(value) {
+                control.binding.write(normalized)
             } else {
-                store.remove(forKey: control.key)
+                store.remove(forKey: control.key, in: .persisted)
             }
         }
     }

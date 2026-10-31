@@ -10,6 +10,8 @@ public enum SaveStateError: Error, Equatable, Sendable {
     case unknownAction(String)
     /// No scenario has this key.
     case unknownScenario(String)
+    /// The action is destructive and the caller didn't allow destructive actions.
+    case destructiveActionNotAllowed(String)
     /// The control's kind doesn't accept this value.
     case invalidValue(key: String, value: ControlValue, kind: ControlKind)
 }

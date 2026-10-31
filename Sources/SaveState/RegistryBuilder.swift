@@ -20,7 +20,8 @@ public final class RegistryBuilder<Model: AnyObject> {
 
     // MARK: - Sections
 
-    /// Groups the controls and actions declared in `content` under a title.
+    /// Groups the controls, actions, and scenarios declared in `content` under
+    /// a title. A nested section replaces the title until it ends.
     public func section(_ title: String, _ content: () -> Void) {
         let enclosingSection = currentSection
         currentSection = title
@@ -161,8 +162,12 @@ public final class RegistryBuilder<Model: AnyObject> {
         )
     }
 
-    /// A control that moves `SaveStateClock`. Its value is the overridden date,
-    /// or `.null` when the clock runs on real time.
+    /// A control that moves `SaveStateClock`. Its value is the date the clock
+    /// was moved to, or `.null` when it runs on real time. Its effective value
+    /// is `SaveStateClock.now`.
+    ///
+    /// A persisted override restarts from its date at each launch, so every
+    /// launch begins in the same state.
     public func clock(_ label: String = "Clock", key: String = "clock") {
         addControl(
             key: key,
@@ -171,7 +176,7 @@ public final class RegistryBuilder<Model: AnyObject> {
             requiresRelaunch: false,
             binding: ClockBinding(),
             defaultValue: .null,
-            readReal: { ControlValue.date(Date()) }
+            readEffective: { ControlValue.date(SaveStateClock.now) }
         )
     }
 
@@ -204,9 +209,13 @@ public final class RegistryBuilder<Model: AnyObject> {
 
     /// A named state, such as `expired-trial`, that `apply` sets up by changing
     /// the model, moving the clock, or doing any other setup work.
+    ///
+    /// - Parameter summary: What the scenario sets up. Agents read it to pick
+    ///   a scenario, so say what the app will show.
     public func scenario(
-        _ key: String,
-        _ summary: String,
+        _ label: String,
+        key: String,
+        summary: String? = nil,
         apply: @escaping @MainActor (Model) async throws -> Void
     ) {
         guard !scenarios.contains(where: { $0.key == key }) else {
@@ -216,6 +225,8 @@ public final class RegistryBuilder<Model: AnyObject> {
         scenarios.append(
             RegisteredScenario(
                 key: key,
+                label: label,
+                section: currentSection,
                 summary: summary,
                 runner: ScenarioRunner(model: model, apply: apply)
             )
@@ -231,7 +242,8 @@ public final class RegistryBuilder<Model: AnyObject> {
         requiresRelaunch: Bool,
         binding: any ControlBinding,
         defaultValue: ControlValue? = nil,
-        readReal: (() -> ControlValue)? = nil
+        readReal: (() -> ControlValue)? = nil,
+        readEffective: (() -> ControlValue)? = nil
     ) {
         guard !controls.contains(where: { $0.key == key }) else {
             assertionFailure("SaveState: duplicate control key \"\(key)\"")
@@ -246,7 +258,8 @@ public final class RegistryBuilder<Model: AnyObject> {
                 requiresRelaunch: requiresRelaunch,
                 defaultValue: defaultValue ?? binding.read(),
                 binding: binding,
-                readReal: readReal
+                readReal: readReal,
+                readEffective: readEffective
             )
         )
     }
@@ -261,7 +274,10 @@ struct Control {
     let requiresRelaunch: Bool
     let defaultValue: ControlValue
     let binding: any ControlBinding
+    /// Reads the real value, for controls whose `.null` means "no override".
     let readReal: (() -> ControlValue)?
+    /// Reads the effective value, for controls that compute it themselves.
+    let readEffective: (() -> ControlValue)?
 }
 
 struct RegisteredAction {
@@ -274,7 +290,9 @@ struct RegisteredAction {
 
 struct RegisteredScenario {
     let key: String
-    let summary: String
+    let label: String
+    let section: String?
+    let summary: String?
     let runner: any ScenarioRunning
 }
 

@@ -7,32 +7,42 @@ import Synchronization
 /// behavior: trial expiry, streaks, "last opened" checks. With no override it
 /// returns `Date()`.
 ///
-/// An override is time travel, not a frozen clock: time keeps running forward
-/// from the moment you set. Overrides come from an enabled `SaveStateRegistry`
-/// (its `clock()` control) or from your own debug code, so a Release build
-/// without an enabled registry always reads real time.
+/// An override is time travel, not a frozen clock: `now` starts at the date
+/// you set and keeps running forward. Overrides come from an enabled
+/// `SaveStateRegistry` (its `clock()` control) or from your own debug code, so
+/// a Release build without an enabled registry always reads real time.
 ///
 /// It is safe to read from any thread or task.
 public enum SaveStateClock {
-    private static let storedOffset = Mutex<TimeInterval?>(nil)
-
-    /// The current date, shifted by the override when one is set.
-    public static var now: Date {
-        guard let offset = storedOffset.withLock({ $0 }) else { return Date() }
-        return Date(timeIntervalSinceNow: offset)
+    private struct Override: Sendable {
+        /// The date the clock was moved to.
+        var start: Date
+        /// The real time when it was moved.
+        var realStart: Date
     }
 
-    /// The overridden current date, or `nil` when the clock runs on real time.
+    private static let storedOverride = Mutex<Override?>(nil)
+
+    /// The current date: real time, or the override's date plus the time that
+    /// has passed since it was set.
+    public static var now: Date {
+        let realNow = Date()
+        guard let override = storedOverride.withLock({ $0 }) else { return realNow }
+        return override.start.addingTimeInterval(realNow.timeIntervalSince(override.realStart))
+    }
+
+    /// The date the clock was last moved to, or `nil` when it runs on real
+    /// time.
     ///
-    /// Setting a date moves the clock there, and time keeps running from it.
-    /// Setting `nil` returns the clock to real time.
+    /// This stays fixed while `now` runs forward from it. Setting a date moves
+    /// the clock there; setting `nil` returns it to real time.
     public static var overrideDate: Date? {
         get {
-            storedOffset.withLock({ $0 }).map { Date(timeIntervalSinceNow: $0) }
+            storedOverride.withLock({ $0 })?.start
         }
         set {
-            let offset = newValue?.timeIntervalSinceNow
-            storedOffset.withLock { $0 = offset }
+            let override = newValue.map { Override(start: $0, realStart: Date()) }
+            storedOverride.withLock { $0 = override }
         }
     }
 }

@@ -1,7 +1,11 @@
+import Foundation
+
 /// The kind of a control, which decides the values it accepts.
 ///
 /// It encodes as JSON such as `{"type": "toggle"}` or
 /// `{"type": "choice", "options": ["staging", "production"]}`.
+///
+/// Adding a case is a breaking wire change: bump `WireProtocol.version`.
 public enum ControlKind: Hashable, Sendable {
     /// On or off. Accepts `.bool`.
     case toggle
@@ -13,7 +17,7 @@ public enum ControlKind: Hashable, Sendable {
     case text
     /// A whole number. Accepts `.int`.
     case integer
-    /// A decimal number. Accepts `.double`, or `.int` converted to a double.
+    /// A finite decimal number. Accepts `.double`, or `.int` converted to a double.
     case decimal
     /// A date, or no override. Accepts `.date` or `.null`.
     case date
@@ -27,10 +31,12 @@ public enum ControlKind: Hashable, Sendable {
              (.triState, .null),
              (.text, .string),
              (.integer, .int),
-             (.decimal, .double),
-             (.date, .date),
              (.date, .null):
             return value
+        case (.decimal, .double(let number)):
+            return number.isFinite ? value : nil
+        case (.date, .date(let date)):
+            return date.timeIntervalSince1970.isFinite ? value : nil
         case (.choice(let options), .string(let option)):
             return options.contains(option) ? value : nil
         case (.decimal, .int(let number)):
@@ -57,6 +63,7 @@ extension ControlKind: Codable {
         case date
     }
 
+    /// Decodes a kind from `{"type": ...}`, plus `options` for a choice.
     public init(from decoder: any Decoder) throws {
         let container = try decoder.container(keyedBy: CodingKeys.self)
         switch try container.decode(KindType.self, forKey: .type) {
@@ -77,6 +84,7 @@ extension ControlKind: Codable {
         }
     }
 
+    /// Encodes the kind as `{"type": ...}`, plus `options` for a choice.
     public func encode(to encoder: any Encoder) throws {
         var container = encoder.container(keyedBy: CodingKeys.self)
         switch self {

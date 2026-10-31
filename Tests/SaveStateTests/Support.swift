@@ -1,4 +1,5 @@
 import Foundation
+import Synchronization
 @testable import SaveState
 
 enum ServerEnvironment: String, CaseIterable, Sendable {
@@ -23,15 +24,38 @@ final class DebugModel {
     var actionRuns = 0
 }
 
-/// A store in its own `UserDefaults` suite, so tests never share values.
-func makeStore() -> OverrideStore {
-    OverrideStore(suiteName: "SaveStateTests.\(UUID().uuidString)")
+/// A `UserDefaults` suite for one test, removed when the test's suite instance
+/// goes away. Every registry in a test that shares it sees the same stored
+/// values, the way relaunches of one app do.
+final class ScratchDefaults: Sendable {
+    let suiteName = "SaveStateTests.\(UUID().uuidString)"
+
+    var store: OverrideStore {
+        OverrideStore(suiteName: suiteName)
+    }
+
+    deinit {
+        UserDefaults.standard.removePersistentDomain(forName: suiteName)
+    }
+}
+
+/// Records whether an observation's change handler ran.
+final class ChangeFlag: Sendable {
+    private let raised = Mutex(false)
+
+    var isRaised: Bool {
+        raised.withLock { $0 }
+    }
+
+    func raise() {
+        raised.withLock { $0 = true }
+    }
 }
 
 @MainActor
 func makeRegistry(
     model: DebugModel,
-    store: OverrideStore = makeStore(),
+    store: OverrideStore,
     isEnabled: Bool = true
 ) -> SaveStateRegistry {
     SaveStateRegistry(model: model, store: store, isEnabled: isEnabled) { r in
@@ -41,6 +65,14 @@ func makeRegistry(
         r.section("Purchases") {
             r.triState("Premium", key: "premium", \.premiumOverride, real: { model.isEntitled })
             r.date("Trial ends", key: "trial-end", \.trialEndOverride)
+            r.scenario(
+                "Expired trial",
+                key: "expired-trial",
+                summary: "The trial ended, so the paywall shows."
+            ) { state in
+                state.premiumOverride = false
+                state.trialEndOverride = Date(timeIntervalSince1970: 1_800_000_000)
+            }
         }
         r.choice("Environment", key: "env", \.environment, requiresRelaunch: true)
         r.text("Greeting", key: "greeting", \.greeting)
@@ -52,11 +84,7 @@ func makeRegistry(
         r.action("Erase", key: "erase", destructive: true) {
             model.actionRuns = 0
         }
-        r.scenario("expired-trial", "Trial ended; the paywall shows") { state in
-            state.premiumOverride = false
-            state.trialEndOverride = Date(timeIntervalSince1970: 1_800_000_000)
-        }
-        r.scenario("broken", "Always throws") { _ in
+        r.scenario("Broken", key: "broken") { _ in
             throw TestError.failed
         }
     }

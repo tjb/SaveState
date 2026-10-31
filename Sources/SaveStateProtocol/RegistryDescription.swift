@@ -10,6 +10,7 @@ public struct RegistryDescription: Codable, Hashable, Sendable {
     /// The scenarios, in declaration order.
     public var scenarios: [ScenarioDescription]
 
+    /// Creates a snapshot.
     public init(
         controls: [ControlDescription],
         actions: [ActionDescription],
@@ -35,13 +36,18 @@ public struct ControlDescription: Codable, Hashable, Sendable {
     public var value: ControlValue
     /// The real value, for controls that report one.
     public var realValue: ControlValue?
-    /// The value the app acts on: the real value when an optional control has no override.
+    /// The value the app acts on: the real value when an optional control has
+    /// no override. For a clock control, the app's current time.
     public var effectiveValue: ControlValue
     /// The value the control had when the registry was created.
     public var defaultValue: ControlValue
     /// Whether a change takes effect only after the app relaunches.
     public var requiresRelaunch: Bool
+    /// The value the app's next launch restores, or `nil` when the next launch
+    /// starts from the default.
+    public var nextLaunchValue: ControlValue?
 
+    /// Creates a control's snapshot.
     public init(
         key: String,
         label: String,
@@ -51,7 +57,8 @@ public struct ControlDescription: Codable, Hashable, Sendable {
         realValue: ControlValue?,
         effectiveValue: ControlValue,
         defaultValue: ControlValue,
-        requiresRelaunch: Bool
+        requiresRelaunch: Bool,
+        nextLaunchValue: ControlValue?
     ) {
         self.key = key
         self.label = label
@@ -62,6 +69,7 @@ public struct ControlDescription: Codable, Hashable, Sendable {
         self.effectiveValue = effectiveValue
         self.defaultValue = defaultValue
         self.requiresRelaunch = requiresRelaunch
+        self.nextLaunchValue = nextLaunchValue
     }
 }
 
@@ -76,6 +84,7 @@ public struct ActionDescription: Codable, Hashable, Sendable {
     /// Whether the action destroys data, so clients should ask before running it.
     public var isDestructive: Bool
 
+    /// Creates an action's snapshot.
     public init(key: String, label: String, section: String?, isDestructive: Bool) {
         self.key = key
         self.label = label
@@ -88,11 +97,18 @@ public struct ActionDescription: Codable, Hashable, Sendable {
 public struct ScenarioDescription: Codable, Hashable, Sendable {
     /// The stable identifier the scenario is applied by, such as `expired-trial`.
     public var key: String
+    /// Display text for people. Never matched on.
+    public var label: String
+    /// The section the scenario was declared in, if any.
+    public var section: String?
     /// What the scenario sets up, for people and agents choosing one.
-    public var summary: String
+    public var summary: String?
 
-    public init(key: String, summary: String) {
+    /// Creates a scenario's snapshot.
+    public init(key: String, label: String, section: String?, summary: String?) {
         self.key = key
+        self.label = label
+        self.section = section
         self.summary = summary
     }
 }

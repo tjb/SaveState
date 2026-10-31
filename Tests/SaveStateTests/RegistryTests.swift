@@ -1,14 +1,19 @@
 import Foundation
+import Observation
 import Testing
 @testable import SaveState
 
 @Suite("Registry")
 @MainActor
 struct RegistryTests {
+    private let scratch = ScratchDefaults()
+
+    // MARK: - Describing
+
     @Test func describeReportsEveryDeclarationInOrder() throws {
         let model = DebugModel()
         model.isEntitled = true
-        let description = makeRegistry(model: model).describe()
+        let description = makeRegistry(model: model, store: scratch.store).describe()
 
         #expect(description.controls.map(\.key) == [
             "onboarding", "premium", "trial-end", "env", "greeting", "launches", "discount",
@@ -26,6 +31,7 @@ struct RegistryTests {
         #expect(premium.effectiveValue == .bool(true))
         #expect(premium.defaultValue == .null)
         #expect(!premium.requiresRelaunch)
+        #expect(premium.nextLaunchValue == nil)
 
         let environment = try #require(description.controls.first(where: { $0.key == "env" }))
         #expect(environment.kind == .choice(options: ["staging", "production"]))
@@ -33,10 +39,16 @@ struct RegistryTests {
         #expect(environment.value == .string("production"))
         #expect(environment.realValue == nil)
         #expect(environment.requiresRelaunch)
+
+        let expiredTrial = try #require(description.scenarios.first)
+        #expect(expiredTrial.label == "Expired trial")
+        #expect(expiredTrial.section == "Purchases")
+        #expect(expiredTrial.summary == "The trial ended, so the paywall shows.")
+        #expect(description.scenarios.last?.summary == nil)
     }
 
     @Test func sectionsNestAndRestore() {
-        let registry = SaveStateRegistry(model: DebugModel(), store: makeStore(), isEnabled: true) { r in
+        let registry = SaveStateRegistry(model: DebugModel(), store: scratch.store, isEnabled: true) { r in
             r.section("Outer") {
                 r.section("Inner") {
                     r.toggle("A", key: "a", \.showsOnboarding)
@@ -49,9 +61,11 @@ struct RegistryTests {
         #expect(registry.describe().controls.map(\.section) == ["Inner", "Outer", nil])
     }
 
+    // MARK: - Setting
+
     @Test func setWritesTheModel() throws {
         let model = DebugModel()
-        let registry = makeRegistry(model: model)
+        let registry = makeRegistry(model: model, store: scratch.store)
         let trialEnd = Date(timeIntervalSince1970: 1_800_000_000)
 
         try registry.set(.bool(true), forKey: "onboarding")
@@ -76,7 +90,7 @@ struct RegistryTests {
 
     @Test func nullClearsOptionalOverrides() throws {
         let model = DebugModel()
-        let registry = makeRegistry(model: model)
+        let registry = makeRegistry(model: model, store: scratch.store)
 
         try registry.set(.bool(false), forKey: "premium")
         try registry.set(.date(Date(timeIntervalSince1970: 0)), forKey: "trial-end")
@@ -89,7 +103,7 @@ struct RegistryTests {
 
     @Test func decimalControlsAcceptWholeNumbers() throws {
         let model = DebugModel()
-        let registry = makeRegistry(model: model)
+        let registry = makeRegistry(model: model, store: scratch.store)
 
         try registry.set(.int(2), forKey: "discount")
 
@@ -100,7 +114,7 @@ struct RegistryTests {
 
     @Test func invalidValuesThrowAndChangeNothing() {
         let model = DebugModel()
-        let registry = makeRegistry(model: model)
+        let registry = makeRegistry(model: model, store: scratch.store)
 
         #expect(throws: SaveStateError.invalidValue(key: "onboarding", value: .int(1), kind: .toggle)) {
             try registry.set(.int(1), forKey: "onboarding")
@@ -115,15 +129,19 @@ struct RegistryTests {
         #expect(throws: SaveStateError.invalidValue(key: "greeting", value: .null, kind: .text)) {
             try registry.set(.null, forKey: "greeting")
         }
+        #expect(throws: SaveStateError.invalidValue(key: "discount", value: .double(.infinity), kind: .decimal)) {
+            try registry.set(.double(.infinity), forKey: "discount")
+        }
 
         #expect(!model.showsOnboarding)
         #expect(model.environment == .production)
         #expect(model.greeting == "Hello")
+        #expect(model.discount == 0)
     }
 
     @Test func batchSetIsAllOrNothing() throws {
         let model = DebugModel()
-        let registry = makeRegistry(model: model)
+        let registry = makeRegistry(model: model, store: scratch.store)
 
         #expect(throws: SaveStateError.invalidValue(key: "launches", value: .string("many"), kind: .integer)) {
             try registry.set(["onboarding": .bool(true), "launches": .string("many")])
@@ -140,8 +158,19 @@ struct RegistryTests {
         #expect(model.launchCount == 4)
     }
 
+    @Test func batchSetReportsTheFirstBadEntryInDeclarationOrder() {
+        let registry = makeRegistry(model: DebugModel(), store: scratch.store)
+
+        #expect(throws: SaveStateError.invalidValue(key: "onboarding", value: .int(1), kind: .toggle)) {
+            try registry.set(["discount": .string("x"), "launches": .null, "onboarding": .int(1)])
+        }
+        #expect(throws: SaveStateError.unknownControl("a")) {
+            try registry.set(["z": .null, "a": .null, "onboarding": .int(1)])
+        }
+    }
+
     @Test func unknownKeysThrow() async {
-        let registry = makeRegistry(model: DebugModel())
+        let registry = makeRegistry(model: DebugModel(), store: scratch.store)
 
         #expect(throws: SaveStateError.unknownControl("nope")) {
             try registry.set(.bool(true), forKey: "nope")
@@ -163,7 +192,7 @@ struct RegistryTests {
     @Test func effectiveValueFallsBackToTheRealValue() throws {
         let model = DebugModel()
         model.isEntitled = true
-        let registry = makeRegistry(model: model)
+        let registry = makeRegistry(model: model, store: scratch.store)
 
         let real = try registry.effectiveValue(forKey: "premium")
         #expect(real == .bool(true))
@@ -176,81 +205,145 @@ struct RegistryTests {
         #expect(noReal == .null)
     }
 
+    // MARK: - Resetting
+
     @Test func resetRestoresDeclaredValues() throws {
-        let store = makeStore()
+        let store = scratch.store
         let model = DebugModel()
         let registry = makeRegistry(model: model, store: store)
         #expect(registry.changedKeys.isEmpty)
 
         try registry.set(.bool(true), forKey: "onboarding", persist: true)
         try registry.set(.string("Hi"), forKey: "greeting")
-        #expect(registry.changedKeys == ["onboarding", "greeting"])
+        try registry.set(.string("staging"), forKey: "env")
+        #expect(registry.changedKeys == ["onboarding", "env", "greeting"])
 
         try registry.reset("onboarding")
         #expect(!model.showsOnboarding)
-        #expect(store.load(forKey: "onboarding") == nil)
-        #expect(registry.changedKeys == ["greeting"])
+        #expect(store.value(forKey: "onboarding", in: .persisted) == nil)
+        #expect(registry.changedKeys == ["env", "greeting"])
 
         try registry.resetAll()
         #expect(model.greeting == "Hello")
+        #expect(model.environment == .production)
+        #expect(store.value(forKey: "env", in: .nextLaunch) == nil)
         #expect(registry.changedKeys.isEmpty)
     }
 
-    @Test func onlyPersistedValuesSurviveRelaunch() throws {
-        let store = makeStore()
+    // MARK: - Relaunching
+
+    @Test func persistedValuesSurviveRelaunchAndSessionValuesDont() throws {
+        let store = scratch.store
         let first = makeRegistry(model: DebugModel(), store: store)
         try first.set(.bool(true), forKey: "onboarding", persist: true)
-        try first.set(.string("staging"), forKey: "env")
+        try first.set(.string("Hi"), forKey: "greeting")
 
         let model = DebugModel()
         let relaunched = makeRegistry(model: model, store: store)
 
         #expect(model.showsOnboarding)
-        #expect(model.environment == .production)
+        #expect(model.greeting == "Hello")
         #expect(relaunched.changedKeys == ["onboarding"])
     }
 
+    @Test func sessionValuesOnRelaunchControlsApplyAtTheNextLaunchOnly() throws {
+        let store = scratch.store
+        let first = makeRegistry(model: DebugModel(), store: store)
+        try first.set(.string("staging"), forKey: "env")
+
+        let nextLaunch = DebugModel()
+        _ = makeRegistry(model: nextLaunch, store: store)
+        #expect(nextLaunch.environment == .staging)
+
+        let launchAfter = DebugModel()
+        _ = makeRegistry(model: launchAfter, store: store)
+        #expect(launchAfter.environment == .production)
+    }
+
+    @Test func aNextLaunchValueTakesPriorityOnceOverAPersistedOne() throws {
+        let store = scratch.store
+        let first = makeRegistry(model: DebugModel(), store: store)
+        try first.set(.string("staging"), forKey: "env", persist: true)
+        try first.set(.string("production"), forKey: "env")
+
+        let nextLaunch = DebugModel()
+        _ = makeRegistry(model: nextLaunch, store: store)
+        #expect(nextLaunch.environment == .production)
+
+        let launchAfter = DebugModel()
+        _ = makeRegistry(model: launchAfter, store: store)
+        #expect(launchAfter.environment == .staging)
+    }
+
+    @Test func describeReportsWhatTheNextLaunchRestores() throws {
+        let registry = makeRegistry(model: DebugModel(), store: scratch.store)
+
+        try registry.set(.bool(true), forKey: "onboarding", persist: true)
+        try registry.set(.string("Hi"), forKey: "greeting")
+        try registry.set(.string("staging"), forKey: "env")
+
+        let controls = registry.describe().controls
+        #expect(controls.first(where: { $0.key == "onboarding" })?.nextLaunchValue == .bool(true))
+        #expect(controls.first(where: { $0.key == "greeting" })?.nextLaunchValue == nil)
+        #expect(controls.first(where: { $0.key == "env" })?.nextLaunchValue == .string("staging"))
+    }
+
     @Test func restoreDropsValuesTheControlNoLongerAccepts() {
-        let store = makeStore()
-        store.save(.string("qa"), forKey: "env")
-        store.save(.int(1), forKey: "onboarding")
+        let store = scratch.store
+        store.save(.string("qa"), forKey: "env", in: .persisted)
+        store.save(.int(1), forKey: "onboarding", in: .persisted)
+        store.save(.string("qa"), forKey: "env", in: .nextLaunch)
 
         let model = DebugModel()
         _ = makeRegistry(model: model, store: store)
 
         #expect(model.environment == .production)
         #expect(!model.showsOnboarding)
-        #expect(store.load(forKey: "env") == nil)
-        #expect(store.load(forKey: "onboarding") == nil)
+        #expect(store.value(forKey: "env", in: .persisted) == nil)
+        #expect(store.value(forKey: "env", in: .nextLaunch) == nil)
+        #expect(store.value(forKey: "onboarding", in: .persisted) == nil)
     }
 
     @Test func storeDropsUndecodableData() throws {
-        let suiteName = "SaveStateTests.\(UUID().uuidString)"
-        let defaults = try #require(UserDefaults(suiteName: suiteName))
-        defaults.set(Data("not json".utf8), forKey: "savestate.onboarding")
+        let defaults = try #require(UserDefaults(suiteName: scratch.suiteName))
+        let store = scratch.store
+        let defaultsKey = store.defaultsKey(forKey: "onboarding", in: .persisted)
+        defaults.set(Data("not json".utf8), forKey: defaultsKey)
 
-        let store = OverrideStore(suiteName: suiteName)
-
-        #expect(store.load(forKey: "onboarding") == nil)
-        #expect(defaults.data(forKey: "savestate.onboarding") == nil)
+        #expect(store.value(forKey: "onboarding", in: .persisted) == nil)
+        #expect(defaults.data(forKey: defaultsKey) == nil)
     }
+
+    // MARK: - Actions and scenarios
 
     @Test func runActionPerformsTheAction() async throws {
         let model = DebugModel()
-        let registry = makeRegistry(model: model)
+        let registry = makeRegistry(model: model, store: scratch.store)
 
         try await registry.runAction("count")
         try await registry.runAction("count")
+
         #expect(model.actionRuns == 2)
+    }
 
-        try await registry.runAction("erase")
+    @Test func destructiveActionsNeedPermission() async throws {
+        let model = DebugModel()
+        model.actionRuns = 5
+        let registry = makeRegistry(model: model, store: scratch.store)
+
+        await #expect(throws: SaveStateError.destructiveActionNotAllowed("erase")) {
+            try await registry.runAction("erase")
+        }
+        #expect(model.actionRuns == 5)
+
+        try await registry.runAction("erase", allowDestructive: true)
         #expect(model.actionRuns == 0)
     }
 
     @Test func applyScenarioSetsUpItsState() async throws {
         let model = DebugModel()
         model.isEntitled = true
-        let registry = makeRegistry(model: model)
+        let registry = makeRegistry(model: model, store: scratch.store)
 
         try await registry.applyScenario("expired-trial")
 
@@ -262,16 +355,34 @@ struct RegistryTests {
     }
 
     @Test func scenarioErrorsReachTheCaller() async {
-        let registry = makeRegistry(model: DebugModel())
+        let registry = makeRegistry(model: DebugModel(), store: scratch.store)
 
         await #expect(throws: TestError.failed) {
             try await registry.applyScenario("broken")
         }
     }
 
-    @Test func disabledRegistryRejectsChangesAndIgnoresPersistedValues() async {
-        let store = makeStore()
-        store.save(.bool(true), forKey: "onboarding")
+    // MARK: - Observing and gating
+
+    @Test func changesThroughTheRegistryNotifyObservers() throws {
+        let registry = makeRegistry(model: DebugModel(), store: scratch.store)
+        let changed = ChangeFlag()
+
+        withObservationTracking {
+            _ = registry.describe()
+        } onChange: {
+            changed.raise()
+        }
+        #expect(!changed.isRaised)
+
+        try registry.set(.bool(true), forKey: "onboarding")
+
+        #expect(changed.isRaised)
+    }
+
+    @Test func disabledRegistryRejectsChangesAndIgnoresStoredValues() async {
+        let store = scratch.store
+        store.save(.bool(true), forKey: "onboarding", in: .persisted)
         let model = DebugModel()
 
         let registry = makeRegistry(model: model, store: store, isEnabled: false)
@@ -296,6 +407,6 @@ struct RegistryTests {
         }
         #expect(!model.showsOnboarding)
         #expect(model.actionRuns == 0)
-        #expect(store.load(forKey: "onboarding") == .bool(true))
+        #expect(store.value(forKey: "onboarding", in: .persisted) == .bool(true))
     }
 }

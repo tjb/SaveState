@@ -43,7 +43,11 @@ let registry = SaveStateRegistry(model: debugState) { r in
     r.action("Reset onboarding", key: "reset-onboarding", destructive: true) {
         onboarding.reset()
     }
-    r.scenario("expired-trial", "Trial ended yesterday; the paywall shows") { state in
+    r.scenario(
+        "Expired trial",
+        key: "expired-trial",
+        summary: "The trial ended yesterday, so the paywall shows."
+    ) { state in
         state.premiumOverride = false
         SaveStateClock.overrideDate = .now.addingTimeInterval(8 * 86_400)
     }
@@ -64,7 +68,14 @@ it on for QA or TestFlight builds.
 Read `SaveStateClock.now` instead of `Date()` wherever "now" decides behavior,
 such as trial expiry or streaks. The `clock()` control and scenarios can then
 move the app's clock, and time keeps running from the new date. With no
-override, `SaveStateClock.now` is `Date()`.
+override, `SaveStateClock.now` is `Date()`. A persisted override restarts from
+its date at each launch, so every launch begins in the same state.
+
+### What survives a relaunch
+
+Changes last for the current launch unless you pass `persist: true`. A change
+to a control declared `requiresRelaunch` lasts through the next launch, so
+relaunching applies it once. The overlay persists its changes; agents choose.
 
 ## Packages
 

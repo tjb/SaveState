@@ -51,6 +51,32 @@ struct CodingTests {
         #expect(date == #"{"type":"date","value":"2027-01-15T08:00:00.250Z"}"#)
     }
 
+    @Test func datesKeepMillisecondsAndEncodeInUTC() throws {
+        let beforeEpoch = try json(ControlValue.date(Date(timeIntervalSince1970: -0.5)))
+        let subMillisecond = try json(ControlValue.date(Date(timeIntervalSince1970: 1_800_000_000.2346)))
+
+        #expect(beforeEpoch == #"{"type":"date","value":"1969-12-31T23:59:59.500Z"}"#)
+        #expect(subMillisecond == #"{"type":"date","value":"2027-01-15T08:00:00.235Z"}"#)
+    }
+
+    @Test func datesCompareAtMillisecondPrecision() throws {
+        let date = Date(timeIntervalSince1970: 1_800_000_000.2346)
+
+        #expect(ControlValue.date(date) == .date(Date(timeIntervalSince1970: 1_800_000_000.235)))
+        #expect(ControlValue.date(date) != .date(Date(timeIntervalSince1970: 1_800_000_000.236)))
+        #expect(Set([ControlValue.date(date), .date(Date(timeIntervalSince1970: 1_800_000_000.2349))]).count == 1)
+        let decoded = try roundTrip(ControlValue.date(date))
+        #expect(decoded == .date(date))
+    }
+
+    @Test func datesDecodeWithoutFractionalSeconds() throws {
+        let data = Data(#"{"type":"date","value":"2027-01-15T08:00:00Z"}"#.utf8)
+
+        let value = try JSONDecoder().decode(ControlValue.self, from: data)
+
+        #expect(value == .date(Date(timeIntervalSince1970: 1_800_000_000)))
+    }
+
     @Test func malformedValuesFailToDecode() {
         let badDate = Data(#"{"type":"date","value":"yesterday"}"#.utf8)
         let unknownType = Data(#"{"type":"color","value":"red"}"#.utf8)
@@ -93,7 +119,8 @@ struct CodingTests {
                     realValue: .bool(true),
                     effectiveValue: .bool(true),
                     defaultValue: .null,
-                    requiresRelaunch: false
+                    requiresRelaunch: false,
+                    nextLaunchValue: nil
                 ),
                 ControlDescription(
                     key: "env",
@@ -104,14 +131,21 @@ struct CodingTests {
                     realValue: nil,
                     effectiveValue: .string("production"),
                     defaultValue: .string("production"),
-                    requiresRelaunch: true
+                    requiresRelaunch: true,
+                    nextLaunchValue: .string("staging")
                 ),
             ],
             actions: [
                 ActionDescription(key: "erase", label: "Erase", section: nil, isDestructive: true),
             ],
             scenarios: [
-                ScenarioDescription(key: "expired-trial", summary: "Trial ended; the paywall shows"),
+                ScenarioDescription(
+                    key: "expired-trial",
+                    label: "Expired trial",
+                    section: "Purchases",
+                    summary: "The trial ended, so the paywall shows."
+                ),
+                ScenarioDescription(key: "fresh-install", label: "Fresh install", section: nil, summary: nil),
             ]
         )
 
@@ -147,6 +181,8 @@ struct NormalizeTests {
         #expect(ControlKind.text.normalize(.null) == nil)
         #expect(ControlKind.integer.normalize(.double(1)) == nil)
         #expect(ControlKind.decimal.normalize(.string("1")) == nil)
+        #expect(ControlKind.decimal.normalize(.double(.nan)) == nil)
+        #expect(ControlKind.decimal.normalize(.double(.infinity)) == nil)
         #expect(ControlKind.date.normalize(.string("2027-01-15")) == nil)
     }
 }
