@@ -48,6 +48,29 @@ private final class Client: Sendable {
         task.cancel(with: .goingAway, reason: nil)
     }
 
+    func sendBinary(_ data: Data) async throws {
+        try await task.send(.data(data))
+    }
+
+    /// Waits for the server's pong, and throws if the connection ends first.
+    func ping() async throws {
+        let task = task
+        try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, any Error>) in
+            task.sendPing { error in
+                if let error {
+                    continuation.resume(throwing: error)
+                } else {
+                    continuation.resume()
+                }
+            }
+        }
+    }
+
+    /// Disconnects abruptly, as a bridge that was killed would.
+    func disconnect() {
+        task.cancel(with: .goingAway, reason: nil)
+    }
+
     func sendRaw(_ text: String) async throws {
         try await task.send(.string(text))
     }
@@ -91,6 +114,36 @@ private final class Client: Sendable {
             task.cancel(with: .goingAway, reason: nil)
             return result
         }
+    }
+}
+
+/// Lets a test hold an action open and see when it arrives.
+private actor Gate {
+    private var hasArrived = false
+    private var isReleased = false
+    private var arrivalWaiters: [CheckedContinuation<Void, Never>] = []
+    private var releaseWaiters: [CheckedContinuation<Void, Never>] = []
+
+    /// Called by the action: reports arrival, then waits for the release.
+    func arrive() async {
+        hasArrived = true
+        arrivalWaiters.forEach { $0.resume() }
+        arrivalWaiters.removeAll()
+        if !isReleased {
+            await withCheckedContinuation { releaseWaiters.append($0) }
+        }
+    }
+
+    func waitForArrival() async {
+        if !hasArrived {
+            await withCheckedContinuation { arrivalWaiters.append($0) }
+        }
+    }
+
+    func release() {
+        isReleased = true
+        releaseWaiters.forEach { $0.resume() }
+        releaseWaiters.removeAll()
     }
 }
 
@@ -244,6 +297,54 @@ struct AgentEndpointTests {
         #expect(canConnect(host: "127.0.0.1", port: endpoint.info.port))
     }
 
+    @Test func aContainerItCantCreateTheFileInThrowsTheWriteError() async throws {
+        // The directory exists but is read-only, so only creating the file can fail.
+        let folder = scratch.container
+            .appendingPathComponent(EndpointInfo.relativePath)
+            .deletingLastPathComponent()
+        let manager = FileManager.default
+        try manager.createDirectory(at: folder, withIntermediateDirectories: true)
+        try manager.setAttributes([.posixPermissions: 0o500], ofItemAtPath: folder.path)
+        defer { try? manager.setAttributes([.posixPermissions: 0o700], ofItemAtPath: folder.path) }
+
+        await #expect(throws: CocoaError(.fileWriteUnknown)) {
+            try await AgentEndpoint.start(registry: makeRegistry(), container: scratch.container)
+        }
+    }
+
+    @Test func aStaleFileIsReplaced() async throws {
+        let url = scratch.container.appendingPathComponent(EndpointInfo.relativePath)
+        try FileManager.default.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
+        try Data("left behind by a crash".utf8).write(to: url)
+
+        let endpoint = try await start()
+        defer { endpoint.stop() }
+
+        let info = try JSONDecoder().decode(EndpointInfo.self, from: Data(contentsOf: url))
+        #expect(info == endpoint.info)
+    }
+
+    @Test func stoppingTwiceLeavesALaterEndpointsFile() async throws {
+        let first = try await start()
+        first.stop()
+        let second = try await start()
+        defer { second.stop() }
+
+        first.stop()
+
+        let url = scratch.container.appendingPathComponent(EndpointInfo.relativePath)
+        #expect(FileManager.default.fileExists(atPath: url.path))
+    }
+
+    @Test func stoppingClosesConnectedClients() async throws {
+        let endpoint = try await start()
+        let client = try await connect(endpoint)
+
+        endpoint.stop()
+
+        #expect(await client.isClosedByServer())
+    }
+
     @Test func eachStartHasANewToken() async throws {
         let first = try await start()
         let token = first.info.token
@@ -319,7 +420,160 @@ struct AgentEndpointTests {
         #expect(error.code == .protocolMismatch)
     }
 
+    @Test func aTokenOfTheRightLengthWithOneWrongCharacterIsRejected() async throws {
+        let endpoint = try await start()
+        defer { endpoint.stop() }
+        let client = try Client(port: endpoint.info.port)
+        let token = endpoint.info.token
+        let wrong = String(token.dropLast()) + (token.hasSuffix("0") ? "1" : "0")
+
+        try await client.send(ClientHello(protocolVersion: WireProtocol.version, token: wrong))
+
+        guard case .rejected(let error) = try await client.receive(ServerHello.self) else {
+            Issue.record("Expected a rejection")
+            return
+        }
+        #expect(error.code == .unauthorized)
+    }
+
+    @Test func aHelloInABinaryFrameIsAccepted() async throws {
+        let endpoint = try await start()
+        defer { endpoint.stop() }
+        let client = try Client(port: endpoint.info.port)
+        let hello = ClientHello(protocolVersion: WireProtocol.version, token: endpoint.info.token)
+
+        try await client.sendBinary(try JSONEncoder().encode(hello))
+
+        #expect(try await client.receive(ServerHello.self) == .accepted)
+    }
+
+    @Test func aPingBeforeHelloIsAnsweredAndDoesNotCountAsAHello() async throws {
+        let endpoint = try await start()
+        defer { endpoint.stop() }
+        let client = try Client(port: endpoint.info.port)
+
+        try await client.ping()
+
+        try await client.send(ClientHello(protocolVersion: WireProtocol.version, token: endpoint.info.token))
+        #expect(try await client.receive(ServerHello.self) == .accepted)
+    }
+
     // MARK: - Requests
+
+    @Test func aResponseCarriesItsRequestsIdentifier() async throws {
+        let endpoint = try await start()
+        defer { endpoint.stop() }
+        let client = try await connect(endpoint)
+
+        try await client.send(RequestEnvelope(id: 42, request: .runAction(key: "run")))
+
+        #expect(try await client.receive(ResponseEnvelope.self).id == 42)
+    }
+
+    @Test func aSecondHelloAfterAuthenticatingIsABadRequest() async throws {
+        let endpoint = try await start()
+        defer { endpoint.stop() }
+        let client = try await connect(endpoint)
+
+        try await client.send(ClientHello(protocolVersion: WireProtocol.version, token: endpoint.info.token))
+
+        #expect(failureCode(try await client.receive(ResponseEnvelope.self).result) == .badRequest)
+    }
+
+    @Test func pipelinedRequestsAreAnsweredInOrder() async throws {
+        let registry = SaveStateRegistry(model: model, store: OverrideStore(suiteName: scratch.suiteName), isEnabled: true) { r in
+            r.toggle("On", key: "on", \.isOn)
+            r.action("Slow", key: "slow") { try await Task.sleep(for: .milliseconds(200)) }
+        }
+        let endpoint = try await start(registry)
+        defer { endpoint.stop() }
+        let client = try await connect(endpoint)
+
+        try await client.send(RequestEnvelope(id: 1, request: .runAction(key: "slow")))
+        try await client.send(RequestEnvelope(id: 2, request: .read(key: "on")))
+
+        #expect(try await client.receive(ResponseEnvelope.self).id == 1)
+        #expect(try await client.receive(ResponseEnvelope.self).id == 2)
+    }
+
+    // MARK: - Disconnection
+
+    /// A registry whose `wait` action holds the request open until the test releases it.
+    private func makeGatedRegistry(_ gate: Gate) -> SaveStateRegistry {
+        let model = model
+        return SaveStateRegistry(model: model, store: OverrideStore(suiteName: scratch.suiteName), isEnabled: true) { r in
+            r.action("Wait", key: "wait") {
+                await gate.arrive()
+                model.runs += 1
+            }
+            r.action("Other", key: "other") { model.scenarioRuns += 1 }
+        }
+    }
+
+    /// Polls, because the held action finishes on its own schedule after release.
+    private func actionFinished(within limit: Duration = .seconds(2)) async -> Bool {
+        let deadline = ContinuousClock.now + limit
+        while model.runs == 0, ContinuousClock.now < deadline {
+            try? await Task.sleep(for: .milliseconds(10))
+        }
+        return model.runs == 1
+    }
+
+    @Test(.timeLimit(.minutes(1))) func aClientThatDisconnectsMidRequestLeavesTheEndpointServing() async throws {
+        let gate = Gate()
+        let endpoint = try await start(makeGatedRegistry(gate))
+        defer { endpoint.stop() }
+        let leaving = try await connect(endpoint)
+        try await leaving.send(RequestEnvelope(id: 1, request: .runAction(key: "wait")))
+        await gate.waitForArrival()
+
+        leaving.disconnect()
+        await gate.release()
+
+        #expect(await actionFinished())
+        let next = try await connect(endpoint)
+        #expect(try await perform(.runAction(key: "other"), on: next) == .done)
+    }
+
+    @Test(.timeLimit(.minutes(1))) func stoppingMidRequestFinishesTheWorkAndAnswersNobody() async throws {
+        let gate = Gate()
+        let endpoint = try await start(makeGatedRegistry(gate))
+        let client = try await connect(endpoint)
+        try await client.send(RequestEnvelope(id: 1, request: .runAction(key: "wait")))
+        await gate.waitForArrival()
+
+        endpoint.stop()
+        await gate.release()
+
+        #expect(await actionFinished())
+        // A response would decode here instead of throwing.
+        await #expect(throws: (any Error).self) {
+            try await client.receive(ResponseEnvelope.self)
+        }
+    }
+
+    @Test func anIdleClientDisconnectingLeavesOthersConnected() async throws {
+        let endpoint = try await start()
+        defer { endpoint.stop() }
+        let leaving = try await connect(endpoint)
+        let staying = try await connect(endpoint)
+
+        leaving.disconnect()
+
+        #expect(try await perform(.runAction(key: "run"), on: staying) == .done)
+    }
+
+    @Test func aMessageOverTheSizeLimitClosesOnlyThatConnection() async throws {
+        let endpoint = try await start()
+        defer { endpoint.stop() }
+        let oversized = try await connect(endpoint)
+        let other = try await connect(endpoint)
+
+        try? await oversized.sendRaw(String(repeating: "x", count: (1 << 20) + 1))
+
+        #expect(await oversized.isClosedByServer(within: .seconds(3)))
+        #expect(try await perform(.runAction(key: "run"), on: other) == .done)
+    }
 
     @Test func describesAndReads() async throws {
         let endpoint = try await start()
