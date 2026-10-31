@@ -36,8 +36,7 @@ public struct SaveStateOverlay: View {
     }
 
     private var accessibilityValue: String {
-        let count = registry.describe().controls.filter(\.isChanged).count
-        return count == 1 ? "1 control changed" : "\(count) controls changed"
+        PanelStatus(registry.describe()).accessibilityValue
     }
 }
 

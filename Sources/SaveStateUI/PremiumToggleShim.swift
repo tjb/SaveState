@@ -119,6 +119,43 @@ final class PremiumProviderModel {
     }
 }
 
+/// What the shim's button and panel show for a provider. It reads the provider
+/// on each access, so a view that uses it while rendering observes the provider.
+@MainActor
+struct PremiumToggleModel {
+    /// Whether the panel offers controls or explains why it can't.
+    enum PanelMode: Equatable {
+        case open
+        case locked
+    }
+
+    let provider: any PremiumStatusProvider
+
+    /// The overlay for a provider, or `nil` when it shouldn't show.
+    static func overlay<Provider: PremiumStatusProvider>(
+        for provider: Provider,
+        isEnabled: Bool
+    ) -> PremiumToggleOverlay<Provider>? {
+        isEnabled ? PremiumToggleOverlay(provider: provider) : nil
+    }
+
+    var panelMode: PanelMode {
+        provider.allowsDebugOverride ? .open : .locked
+    }
+
+    var statusText: String {
+        provider.isPremium ? "Premium is on" : "Premium is off"
+    }
+
+    var statusImage: String {
+        provider.isPremium ? "crown.fill" : "crown"
+    }
+
+    var accessibilityValue: String {
+        provider.isPremium ? "Premium on" : "Premium off"
+    }
+}
+
 /// A floating ladybug button that opens a panel for overriding premium status.
 ///
 /// Most apps attach it with ``SwiftUICore/View/premiumToggle(_:alignment:isEnabled:)``.
@@ -148,6 +185,10 @@ private struct PremiumToggleButton<Provider: PremiumStatusProvider>: View {
         _registry = State(initialValue: PremiumProviderModel.makeRegistry(for: provider))
     }
 
+    private var model: PremiumToggleModel {
+        PremiumToggleModel(provider: provider)
+    }
+
     var body: some View {
         Button {
             isPanelPresented.toggle()
@@ -157,7 +198,7 @@ private struct PremiumToggleButton<Provider: PremiumStatusProvider>: View {
                 .font(.title2)
         }
         .overlayFloatingButtonStyle()
-        .accessibilityValue(provider.isPremium ? "Premium on" : "Premium off")
+        .accessibilityValue(model.accessibilityValue)
         .accessibilityIdentifier("premiumToggle.button")
         .popover(isPresented: $isPanelPresented) {
             panel
@@ -168,7 +209,7 @@ private struct PremiumToggleButton<Provider: PremiumStatusProvider>: View {
 
     @ViewBuilder
     private var panel: some View {
-        if provider.allowsDebugOverride {
+        if model.panelMode == .open {
             VStack(alignment: .leading, spacing: 0) {
                 status
                     .padding([.horizontal, .top])
@@ -193,10 +234,7 @@ private struct PremiumToggleButton<Provider: PremiumStatusProvider>: View {
     /// The status the app acts on. The registry can't report it as a real value,
     /// because `isPremium` includes any override.
     private var status: some View {
-        Label(
-            provider.isPremium ? "Premium is on" : "Premium is off",
-            systemImage: provider.isPremium ? "crown.fill" : "crown"
-        )
+        Label(model.statusText, systemImage: model.statusImage)
         .font(.footnote)
         .accessibilityElement(children: .combine)
         .accessibilityIdentifier("premiumToggle.status")
@@ -218,8 +256,8 @@ public extension View {
         isEnabled: Bool = PremiumToggleBuild.isDebug
     ) -> some View {
         overlay(alignment: alignment) {
-            if isEnabled {
-                PremiumToggleOverlay(provider: provider)
+            if let overlay = PremiumToggleModel.overlay(for: provider, isEnabled: isEnabled) {
+                overlay
                     .padding()
             }
         }

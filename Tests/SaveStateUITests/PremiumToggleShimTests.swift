@@ -30,15 +30,6 @@ private final class SampleManager: PremiumStatusProvider {
     }
 }
 
-/// A `UserDefaults` suite for one test, removed when the test ends.
-private final class ScratchSuite: Sendable {
-    let name = "SaveStateUITests.\(UUID().uuidString)"
-
-    deinit {
-        UserDefaults.standard.removePersistentDomain(forName: name)
-    }
-}
-
 @Suite("PremiumToggle shim")
 @MainActor
 struct PremiumToggleShimTests {
@@ -114,6 +105,16 @@ struct PremiumToggleShimTests {
         #expect(storage.value == nil)
     }
 
+    @Test func storageKeepsOverridesUnderACustomKeyApart() {
+        let other = PremiumDebugOverride(suiteName: suiteName, key: "other")
+
+        other.value = false
+
+        #expect(other.key == "other")
+        #expect(other.value == false)
+        #expect(storage.value == nil)
+    }
+
     @Test func storageRoundTripsUnderTheKeyPremiumToggleUsed() {
         #expect(PremiumDebugOverride.defaultKey == "debug_premium_override")
         storage.value = true
@@ -122,4 +123,93 @@ struct PremiumToggleShimTests {
         storage.value = nil
         #expect(storage.value == nil)
     }
+}
+
+@Suite("PremiumToggle shim display")
+@MainActor
+struct PremiumToggleModelTests {
+    private let scratch = ScratchSuite()
+    private var storage: PremiumDebugOverride { PremiumDebugOverride(suiteName: scratch.name) }
+
+    @Test func aFreeProviderReportsPremiumOff() {
+        let model = PremiumToggleModel(provider: SampleManager(storage: storage))
+
+        #expect(model.statusText == "Premium is off")
+        #expect(model.statusImage == "crown")
+        #expect(model.accessibilityValue == "Premium off")
+    }
+
+    @Test func anEntitledProviderReportsPremiumOn() {
+        let manager = SampleManager(storage: storage)
+        manager.isEntitled = true
+
+        let model = PremiumToggleModel(provider: manager)
+
+        #expect(model.statusText == "Premium is on")
+        #expect(model.statusImage == "crown.fill")
+        #expect(model.accessibilityValue == "Premium on")
+    }
+
+    @Test func statusFollowsTheOverrideRatherThanEntitlement() {
+        let manager = SampleManager(storage: storage)
+        manager.isEntitled = true
+        manager.setDebugOverride(false)
+
+        #expect(PremiumToggleModel(provider: manager).statusText == "Premium is off")
+    }
+
+    @Test func statusReadsTheProviderEachTime() {
+        let manager = SampleManager(storage: storage)
+        let model = PremiumToggleModel(provider: manager)
+
+        manager.setDebugOverride(true)
+
+        #expect(model.statusText == "Premium is on")
+    }
+
+    @Test func aProviderThatAcceptsOverridesGetsTheOpenPanel() {
+        let manager = SampleManager(allowsDebugOverride: true, storage: storage)
+
+        #expect(PremiumToggleModel(provider: manager).panelMode == .open)
+    }
+
+    @Test func aProviderThatBlocksOverridesGetsTheLockedPanel() {
+        let manager = SampleManager(allowsDebugOverride: false, storage: storage)
+
+        #expect(PremiumToggleModel(provider: manager).panelMode == .locked)
+    }
+
+    @Test func providersAcceptOverridesByDefault() {
+        #expect(PremiumToggleModel(provider: MinimalProvider()).panelMode == .open)
+    }
+
+    @Test func theOverlayIsHiddenWhenNotEnabled() {
+        let manager = SampleManager(storage: storage)
+
+        #expect(PremiumToggleModel.overlay(for: manager, isEnabled: false) == nil)
+    }
+
+    @Test func theOverlayShowsWhenEnabled() {
+        let manager = SampleManager(storage: storage)
+
+        #expect(PremiumToggleModel.overlay(for: manager, isEnabled: true) != nil)
+    }
+
+    @Test func theBuildFlagMatchesHowThisPackageWasCompiled() {
+        #if DEBUG
+        #expect(PremiumToggleBuild.isDebug)
+        #else
+        #expect(!PremiumToggleBuild.isDebug)
+        #endif
+    }
+}
+
+/// Implements only what `PremiumStatusProvider` requires.
+@MainActor
+@Observable
+private final class MinimalProvider: PremiumStatusProvider {
+    var isPremium: Bool { false }
+    var debugOverride: Bool? { nil }
+
+    func setDebugOverride(_ value: Bool?) {}
 }

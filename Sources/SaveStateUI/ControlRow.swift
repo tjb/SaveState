@@ -10,12 +10,16 @@ struct ControlRow: View {
 
     @State private var resetCount = 0
 
+    private var model: ControlRowModel {
+        ControlRowModel(control: control)
+    }
+
     var body: some View {
         VStack(alignment: .leading, spacing: 6) {
             HStack(spacing: 8) {
                 title
                 Spacer(minLength: 4)
-                if control.isChanged {
+                if model.showsReset {
                     resetButton
                 }
                 inlineEditor
@@ -23,7 +27,7 @@ struct ControlRow: View {
             editorBelow
         }
         .accessibilityElement(children: .contain)
-        .accessibilityIdentifier("saveState.row.\(control.key)")
+        .accessibilityIdentifier(model.rowIdentifier)
     }
 
     private var title: some View {
@@ -32,17 +36,17 @@ struct ControlRow: View {
                 .font(.subheadline)
                 // Every editor carries the label for VoiceOver.
                 .accessibilityHidden(true)
-            if control.isChanged || control.requiresRelaunch {
+            if model.showsMarkers {
                 HStack(spacing: 8) {
-                    if control.isChanged {
+                    if model.showsChangedMarker {
                         Label("Changed", systemImage: "wrench.and.screwdriver")
                             .foregroundStyle(.orange)
-                            .accessibilityIdentifier("saveState.changed.\(control.key)")
+                            .accessibilityIdentifier(model.changedIdentifier)
                     }
-                    if control.requiresRelaunch {
+                    if model.showsRelaunchMarker {
                         Label("Applies on relaunch", systemImage: "arrow.clockwise.circle")
                             .foregroundStyle(.secondary)
-                            .accessibilityIdentifier("saveState.relaunch.\(control.key)")
+                            .accessibilityIdentifier(model.relaunchIdentifier)
                     }
                 }
                 .font(.caption2)
@@ -60,7 +64,7 @@ struct ControlRow: View {
                 .font(.caption)
         }
         .buttonStyle(.borderless)
-        .accessibilityIdentifier("saveState.reset.\(control.key)")
+        .accessibilityIdentifier(model.resetIdentifier)
     }
 
     /// Editors small enough to share the title's line.
@@ -107,22 +111,19 @@ struct ControlRow: View {
     }
 
     private var editorIdentifier: String {
-        "saveState.control.\(control.key)"
+        model.editorIdentifier
     }
 
     private var boolBinding: Binding<Bool> {
         Binding(
-            get: { control.value == .bool(true) },
+            get: { model.isOn },
             set: { change(.bool($0)) }
         )
     }
 
     private var stringBinding: Binding<String> {
         Binding(
-            get: {
-                if case .string(let option) = control.value { return option }
-                return ""
-            },
+            get: { model.selectedOption },
             set: { change(.string($0)) }
         )
     }
@@ -141,16 +142,16 @@ private struct TriStateEditor: View {
                 get: { control.value },
                 set: { change($0) }
             )) {
-                Text("On").tag(ControlValue.bool(true))
-                Text("Off").tag(ControlValue.bool(false))
-                Text("Real").tag(ControlValue.null)
+                ForEach(TriStateOption.all, id: \.value) { option in
+                    Text(option.title).tag(option.value)
+                }
             }
             .pickerStyle(.segmented)
             .labelsHidden()
             .accessibilityIdentifier(identifier)
 
-            if case .bool(let real)? = control.realValue {
-                Text("Real value: \(real ? "on" : "off")")
+            if let caption = TriStateOption.realCaption(for: control) {
+                Text(caption)
                     .font(.caption)
                     .foregroundStyle(.secondary)
             }
@@ -171,8 +172,7 @@ private struct TextEditorField: View {
     let change: (ControlValue) -> Void
     let identifier: String
 
-    @State private var draft: String
-    @State private var isInvalid = false
+    @State private var draft: TextDraft
     @FocusState private var isFocused: Bool
 
     init(
@@ -185,7 +185,7 @@ private struct TextEditorField: View {
         self.resetToken = resetToken
         self.change = change
         self.identifier = identifier
-        _draft = State(initialValue: ControlText.text(for: control.value))
+        _draft = State(initialValue: TextDraft(value: control.value))
     }
 
     var body: some View {
@@ -198,17 +198,15 @@ private struct TextEditorField: View {
                     if !focused { applyDraft() }
                 }
                 .onChange(of: control.value) { _, value in
-                    draft = ControlText.text(for: value)
-                    isInvalid = false
+                    draft.discard(showing: value)
                 }
                 .onChange(of: resetToken) {
-                    draft = ControlText.text(for: control.value)
-                    isInvalid = false
+                    draft.discard(showing: control.value)
                 }
                 .onDisappear(perform: applyDraft)
                 .accessibilityIdentifier(identifier)
-            if isInvalid {
-                Text(control.kind == .integer ? "Enter a whole number." : "Enter a number.")
+            if draft.isInvalid {
+                Text(TextDraft.invalidMessage(for: control.kind))
                     .font(.caption)
                     .foregroundStyle(.red)
             }
@@ -217,7 +215,7 @@ private struct TextEditorField: View {
 
     @ViewBuilder
     private var field: some View {
-        let textField = TextField(control.label, text: $draft)
+        let textField = TextField(control.label, text: $draft.text)
         #if os(iOS)
         switch control.kind {
         case .integer, .decimal:
@@ -237,17 +235,9 @@ private struct TextEditorField: View {
     }
 
     private func applyDraft() {
-        // Displayed numbers are rounded, so unedited text must not write back.
-        guard draft != ControlText.text(for: control.value) else {
-            isInvalid = false
-            return
+        if let value = draft.apply(to: control) {
+            change(value)
         }
-        guard let value = ControlText.value(from: draft, kind: control.kind) else {
-            isInvalid = true
-            return
-        }
-        isInvalid = false
-        change(value)
     }
 }
 
@@ -258,9 +248,13 @@ private struct DateEditor: View {
     let change: (ControlValue) -> Void
     let identifier: String
 
+    private var model: DateEditorModel {
+        DateEditorModel(control: control)
+    }
+
     var body: some View {
         VStack(alignment: .leading, spacing: 4) {
-            if case .date(let date) = control.value {
+            if let date = model.date {
                 HStack {
                     DatePicker(
                         control.label,
@@ -277,34 +271,29 @@ private struct DateEditor: View {
                     }
                     .buttonStyle(.borderless)
                     .foregroundStyle(.secondary)
-                    .accessibilityIdentifier("\(identifier).clear")
+                    .accessibilityIdentifier(ControlRowModel.clearIdentifier(editor: identifier))
                 }
             } else {
                 HStack {
-                    Text(control.realValue == nil ? "Not set" : "Using real value")
+                    Text(model.placeholder)
                         .font(.footnote)
                         .foregroundStyle(.secondary)
                     Spacer()
                     Button("Set") {
-                        change(.date(realDate ?? SaveStateClock.now))
+                        change(.date(model.dateForSet(now: SaveStateClock.now)))
                     }
                     .accessibilityLabel("Set \(control.label)")
                     .controlSize(.small)
                     .overlayPanelButtonStyle()
-                    .accessibilityIdentifier("\(identifier).set")
+                    .accessibilityIdentifier(ControlRowModel.setIdentifier(editor: identifier))
                 }
             }
-            if let realDate {
-                Text("Real value: \(realDate.formatted(date: .abbreviated, time: .shortened))")
+            if let caption = model.realCaption {
+                Text(caption)
                     .font(.caption)
                     .foregroundStyle(.secondary)
             }
         }
-    }
-
-    private var realDate: Date? {
-        if case .date(let date)? = control.realValue { return date }
-        return nil
     }
 }
 
@@ -313,31 +302,32 @@ private struct DateEditor: View {
 /// Moves `SaveStateClock`: shows the running time, jumps by common amounts,
 /// picks a date, or returns to real time.
 private struct ClockEditor: View {
-    private static let day: TimeInterval = 86_400
-
     let control: ControlDescription
     let change: (ControlValue) -> Void
     let identifier: String
+
+    private var model: ClockEditorModel {
+        ClockEditorModel(control: control)
+    }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
             TimelineView(.periodic(from: .now, by: 1)) { _ in
                 Text(SaveStateClock.now.formatted(date: .abbreviated, time: .standard))
                     .font(.footnote.monospacedDigit())
-                    .foregroundStyle(isMoved ? .orange : .secondary)
-                    .accessibilityIdentifier("\(identifier).now")
+                    .foregroundStyle(model.isMoved ? .orange : .secondary)
+                    .accessibilityIdentifier(ControlRowModel.nowIdentifier(editor: identifier))
             }
             HStack(spacing: 6) {
-                jump("-1d", accessibilityLabel: "Back one day", by: -Self.day)
-                jump("+1d", accessibilityLabel: "Forward one day", by: Self.day)
-                jump("+1w", accessibilityLabel: "Forward one week", by: 7 * Self.day)
-                jump("+30d", accessibilityLabel: "Forward thirty days", by: 30 * Self.day)
+                ForEach(ClockJump.all, id: \.title) { jump in
+                    jumpButton(jump)
+                }
             }
             HStack {
                 DatePicker(
                     control.label,
                     selection: Binding(
-                        get: { movedDate ?? SaveStateClock.now },
+                        get: { model.pickerDate(now: SaveStateClock.now) },
                         set: { change(.date($0)) }
                     )
                 )
@@ -351,30 +341,21 @@ private struct ClockEditor: View {
                 .fixedSize()
                 .controlSize(.small)
                 .overlayPanelButtonStyle()
-                .disabled(!isMoved)
-                .accessibilityIdentifier("\(identifier).clear")
+                .disabled(!model.isMoved)
+                .accessibilityIdentifier(ControlRowModel.clearIdentifier(editor: identifier))
             }
         }
     }
 
-    private var movedDate: Date? {
-        if case .date(let date) = control.value { return date }
-        return nil
-    }
-
-    private var isMoved: Bool {
-        movedDate != nil
-    }
-
-    private func jump(_ title: String, accessibilityLabel: String, by interval: TimeInterval) -> some View {
-        Button(title) {
-            change(.date(SaveStateClock.now.addingTimeInterval(interval)))
+    private func jumpButton(_ jump: ClockJump) -> some View {
+        Button(jump.title) {
+            change(.date(jump.target(from: SaveStateClock.now)))
         }
         .font(.caption.monospacedDigit())
         .lineLimit(1)
         .minimumScaleFactor(0.7)
         .controlSize(.small)
         .overlayPanelButtonStyle()
-        .accessibilityLabel(accessibilityLabel)
+        .accessibilityLabel(jump.accessibilityLabel)
     }
 }
