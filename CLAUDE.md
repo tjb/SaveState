@@ -27,6 +27,8 @@ xcodebuild build -scheme SaveState-Package \
   -destination 'generic/platform=iOS Simulator' # root package on iOS
 (cd CLI && swift build && swift test)           # CLI and bridge
 swiftlint lint --strict                         # lint; CI pins the version
+swift test -c release -Xswiftc -enable-testing  # what only Release builds do
+python3 .github/scripts/coverage.py .           # coverage; pass CLI for the bridge
 ```
 
 ## Rules
@@ -46,6 +48,11 @@ swiftlint lint --strict                         # lint; CI pins the version
 - SwiftLint runs as a binary, never as a package plugin, so the root package
   stays free of dependencies.
 - Tests use Swift Testing. Public API gets doc comments.
+- Unit test everything you can, and keep decisions out of SwiftUI view bodies so
+  tests can reach them. A test has to fail when the behavior breaks, so check
+  important ones by breaking the code. CI fails if a file drops below its floor in
+  `.github/coverage-floor-*.json`. Raise floors as coverage grows, and don't lower one
+  without saying why in the pull request.
 
 ## Git
 

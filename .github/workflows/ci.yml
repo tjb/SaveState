@@ -55,6 +55,15 @@ jobs:
           swift test 2>&1 | tee test.log; status=${PIPESTATUS[0]}
           bash "$GITHUB_WORKSPACE/.github/scripts/annotate-errors.sh" test.log
           exit "$status"
+      - name: Test in Release
+        # Only here can tests see what Release builds do, such as a registry that's
+        # disabled by default.
+        run: |
+          swift test -c release -Xswiftc -enable-testing 2>&1 | tee test-release.log; status=${PIPESTATUS[0]}
+          bash "$GITHUB_WORKSPACE/.github/scripts/annotate-errors.sh" test-release.log
+          exit "$status"
+      - name: Check coverage
+        run: python3 .github/scripts/coverage.py . --floor .github/coverage-floor-root.json
 
   ios:
     name: Package (iOS)
@@ -145,6 +154,9 @@ jobs:
           swift test 2>&1 | tee test.log; status=${PIPESTATUS[0]}
           bash "$GITHUB_WORKSPACE/.github/scripts/annotate-errors.sh" test.log
           exit "$status"
+      - name: Check coverage
+        working-directory: .
+        run: python3 .github/scripts/coverage.py CLI --floor .github/coverage-floor-cli.json
       - name: MCP smoke test
         run: |
           init='{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-06-18","capabilities":{},"clientInfo":{"name":"ci","version":"0"}}}'

@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Reports line coverage across every test bundle, and enforces a floor.
 
-Usage: coverage.py <package dir> [--floor coverage-floor.json] [--write-floor path]
+Usage: coverage.py <package dir> [--floor floor.json] [--write-floor floor.json]
 
 `swift test --enable-code-coverage` builds one bundle per test target, and its
 exported JSON leaves some modules out, so this merges them with llvm-cov directly.
@@ -56,7 +56,7 @@ def main():
     print(f"{total:6.1f}%  {covered:4}/{count:<4}  total")
 
     if args.write_floor:
-        # Rounded down, with a small allowance so unrelated line shifts don't fail.
+        # Rounded down, so a small shift in line counts alone doesn't fail the floor.
         floor = {name: int(lines["percent"]) for name, lines in sorted(files.items())}
         pathlib.Path(args.write_floor).write_text(json.dumps(floor, indent=2) + "\n")
 
