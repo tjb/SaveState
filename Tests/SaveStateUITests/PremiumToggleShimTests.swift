@@ -95,14 +95,17 @@ struct PremiumToggleShimTests {
         #expect(try premium(registry).value == .bool(true))
     }
 
-    @Test func aProviderThatBlocksOverridesStaysUnchanged() throws {
+    /// The provider owns the override, so the control reports what the provider
+    /// holds rather than what was asked for.
+    @Test func aProviderThatRefusesAnOverrideStillShowsNoOverride() throws {
         let manager = SampleManager(allowsDebugOverride: false, storage: storage)
         let registry = PremiumProviderModel.makeRegistry(for: manager)
 
         try registry.set(.bool(true), forKey: "premium", persist: true)
 
-        #expect(manager.debugOverride == nil)
-        #expect(storage.value == nil)
+        let control = try premium(registry)
+        #expect(control.value == .null)
+        #expect(!control.isChanged)
     }
 
     @Test func storageKeepsOverridesUnderACustomKeyApart() {
@@ -195,6 +198,8 @@ struct PremiumToggleModelTests {
         #expect(PremiumToggleModel.overlay(for: manager, isEnabled: true) != nil)
     }
 
+    /// A Debug run can only check the first branch, so a flag hard-coded to `true`
+    /// fails only under `swift test -c release -Xswiftc -enable-testing`.
     @Test func theBuildFlagMatchesHowThisPackageWasCompiled() {
         #if DEBUG
         #expect(PremiumToggleBuild.isDebug)

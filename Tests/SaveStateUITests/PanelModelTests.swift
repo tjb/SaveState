@@ -235,6 +235,14 @@ struct PanelChangeTests {
         #expect(fixture.session.resetAllCount == 2)
     }
 
+    @Test func aRefusedResetAllStillTellsRowsToDiscardTheirDrafts() {
+        let fixture = Fixture(isEnabled: false)
+
+        fixture.model.resetAll()
+
+        #expect(fixture.session.resetAllCount == 1)
+    }
+
     @Test func resetAllClearsAnEarlierMessage() {
         let fixture = Fixture()
         fixture.runState.message = failure
@@ -302,7 +310,9 @@ struct PanelRunTests {
         await run?.value
     }
 
-    @Test func aPanelReopenedDuringARunSeesItAndItsResult() async throws {
+    /// Covers the model only. That `SaveStateOverlay` keeps one run state across
+    /// presentations is view wiring, which no unit test here observes.
+    @Test func aModelOverTheSameRunStateSeesARunAndItsResult() async throws {
         let fixture = Fixture()
         let run = fixture.model.request(try fixture.action("slow"))
 
@@ -400,14 +410,21 @@ struct PanelConfirmationTests {
         #expect(fixture.session.actionToConfirm == nil)
     }
 
-    @Test func closingThePanelDropsAPendingConfirmation() throws {
+    /// SwiftUI may clear the alert's binding before calling its button, so the
+    /// presented action has to run with nothing pending.
+    @Test func confirmingRunsTheActionWhenTheBindingWasAlreadyCleared() async throws {
         let fixture = Fixture()
-        fixture.model.request(try fixture.action("erase"))
+        let erase = try fixture.action("erase")
+        fixture.model.request(erase)
+        fixture.session.actionToConfirm = nil
 
-        let reopened = PanelModel(registry: fixture.registry, runState: fixture.runState, session: PanelSession())
+        await fixture.model.confirm(erase).value
 
-        #expect(reopened.session.actionToConfirm == nil)
-        #expect(reopened.confirmationTitle == "Run action?")
+        #expect(fixture.state.ranKeys == ["erase"])
+    }
+
+    @Test func theConfirmationTitleIsGenericWithNothingPending() {
+        #expect(Fixture().model.confirmationTitle == "Run action?")
     }
 }
 
