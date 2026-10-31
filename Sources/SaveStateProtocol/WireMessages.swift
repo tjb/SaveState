@@ -55,7 +55,7 @@ public enum ServerHello: Codable, Hashable, Sendable {
     /// The connection may send requests.
     case accepted
     /// The endpoint closes the connection after sending this.
-    case rejected(WireError)
+    case rejected(error: WireError)
 }
 
 /// One operation a client asks of an app.
@@ -64,7 +64,9 @@ public enum WireRequest: Codable, Hashable, Sendable {
     case describe
     /// Returns a `.control` with one control's current values.
     case read(key: String)
-    /// Sets one control. Without `persist`, the value lasts for this launch.
+    /// Sets one control. Without `persist`, the value lasts for this launch,
+    /// except on a control that requires a relaunch: there it lasts through the
+    /// next launch, so relaunching applies it once.
     case set(key: String, value: ControlValue, persist: Bool)
     /// Runs an action. Destructive actions are refused.
     case runAction(key: String)
@@ -77,11 +79,11 @@ public enum WireResult: Codable, Hashable, Sendable {
     /// The request succeeded and has nothing to return.
     case done
     /// The registry's current description.
-    case description(RegistryDescription)
+    case description(registry: RegistryDescription)
     /// One control's current values.
-    case control(ControlDescription)
+    case control(control: ControlDescription)
     /// The request failed.
-    case failure(WireError)
+    case failure(error: WireError)
 }
 
 /// A request and the identifier its response will carry.

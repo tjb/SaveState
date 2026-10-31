@@ -28,6 +28,9 @@ import SaveStateProtocol
 @MainActor
 public final class AgentEndpoint {
     private static var current: AgentEndpoint?
+    /// The latest start, which the next one waits for, so overlapping starts run
+    /// one at a time and leave exactly one endpoint.
+    private static var latestStart: Task<AgentEndpoint?, any Error>?
 
     /// What the endpoint wrote to its endpoint file.
     public let info: EndpointInfo
@@ -36,6 +39,7 @@ public final class AgentEndpoint {
     private let listener: NWListener
     private let fileURL: URL
     private var connections: [ObjectIdentifier: AgentConnection] = [:]
+    private var isStopped = false
 
     /// Starts the endpoint, replacing one already running, and returns once it's
     /// listening and its file is written.
@@ -43,25 +47,40 @@ public final class AgentEndpoint {
     /// - Parameters:
     ///   - registry: The registry clients read and change.
     ///   - container: The directory `EndpointInfo.relativePath` is relative to.
-    ///     Defaults to the app's home directory, its data container.
+    ///     In the simulator it defaults to the app's data container. A Mac has no
+    ///     per-app container, so there you must pass one.
     /// - Returns: The endpoint, or `nil` where it doesn't run: when the registry
-    ///   is disabled, and on a physical device, where nothing listens.
+    ///   is disabled, on a Mac with no container given, and on any physical device,
+    ///   where nothing listens. A running endpoint stops in those cases too.
     @discardableResult
     public static func start(
         registry: SaveStateRegistry,
         container: URL? = nil
     ) async throws -> AgentEndpoint? {
-        #if os(iOS) && !targetEnvironment(simulator)
-        return nil
+        #if targetEnvironment(simulator) || os(macOS)
+        let previous = latestStart
+        let start = Task { @MainActor in
+            _ = try? await previous?.value
+            current?.stop()
+            guard registry.isEnabled, let container = container ?? defaultContainer else { return nil as AgentEndpoint? }
+            let endpoint = try await AgentEndpoint(registry: registry, container: container)
+            current = endpoint
+            return endpoint
+        }
+        latestStart = start
+        return try await start.value
         #else
-        guard registry.isEnabled else { return nil }
-        current?.stop()
-        let endpoint = try await AgentEndpoint(
-            registry: registry,
-            container: container ?? URL(fileURLWithPath: NSHomeDirectory())
-        )
-        current = endpoint
-        return endpoint
+        return nil
+        #endif
+    }
+
+    /// Where the endpoint runs by default. It's an allowlist, so a new platform
+    /// or device stays closed until someone decides otherwise.
+    private static var defaultContainer: URL? {
+        #if targetEnvironment(simulator)
+        return URL(fileURLWithPath: NSHomeDirectory())
+        #else
+        return nil
         #endif
     }
 
@@ -97,7 +116,12 @@ public final class AgentEndpoint {
     }
 
     /// Stops listening, closes every connection, and removes the endpoint file.
+    ///
+    /// Stopping again does nothing, so a replaced endpoint can't remove the file of
+    /// the one that replaced it.
     public func stop() {
+        guard !isStopped else { return }
+        isStopped = true
         listener.newConnectionHandler = nil
         listener.cancel()
         for connection in connections.values {
@@ -293,7 +317,7 @@ private final class AgentConnection {
     }
 
     private func reject(_ error: WireError) {
-        send(ServerHello.rejected(error)) { [weak self] in
+        send(ServerHello.rejected(error: error)) { [weak self] in
             self?.close()
         }
     }
@@ -301,9 +325,19 @@ private final class AgentConnection {
     private func answer(_ data: Data) async {
         do {
             let envelope = try JSONDecoder().decode(RequestEnvelope.self, from: data)
-            send(ResponseEnvelope(id: envelope.id, result: await perform(envelope.request)))
+            let result = await perform(envelope.request)
+            let response = ResponseEnvelope(id: envelope.id, result: result)
+            guard (try? JSONEncoder().encode(response)) != nil else {
+                // JSON can't carry a non-finite number, such as a model's NaN.
+                send(ResponseEnvelope(id: envelope.id, result: .failure(error: WireError(
+                    code: .operationFailed,
+                    message: "The app's response can't be encoded. Check for a control holding NaN or infinity."
+                ))))
+                return
+            }
+            send(response)
         } catch {
-            send(ResponseEnvelope(id: nil, result: .failure(WireError(
+            send(ResponseEnvelope(id: nil, result: .failure(error: WireError(
                 code: .badRequest,
                 message: "The message isn't a request: \(error)"
             ))))
@@ -314,12 +348,12 @@ private final class AgentConnection {
         do {
             switch request {
             case .describe:
-                return .description(registry.describe())
+                return .description(registry: registry.describe())
             case .read(let key):
                 guard let control = registry.describe().controls.first(where: { $0.key == key }) else {
                     throw SaveStateError.unknownControl(key)
                 }
-                return .control(control)
+                return .control(control: control)
             case .set(let key, let value, let persist):
                 try registry.set(value, forKey: key, persist: persist)
                 return .done
@@ -331,9 +365,9 @@ private final class AgentConnection {
                 return .done
             }
         } catch let error as SaveStateError {
-            return .failure(WireError(saveStateError: error))
+            return .failure(error: WireError(saveStateError: error))
         } catch {
-            return .failure(WireError(code: .operationFailed, message: String(describing: error)))
+            return .failure(error: WireError(code: .operationFailed, message: String(describing: error)))
         }
     }
 

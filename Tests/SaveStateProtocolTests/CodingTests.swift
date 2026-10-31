@@ -192,3 +192,26 @@ struct NormalizeTests {
         #expect(ControlKind.clock.normalize(.string("2027-01-15")) == nil)
     }
 }
+
+@Suite("Wire messages")
+struct WireMessageTests {
+    private let error = WireError(code: .unknownControl, message: "No such control.")
+
+    @Test func messagesRoundTrip() throws {
+        let request = RequestEnvelope(id: 3, request: .set(key: "on", value: .bool(true), persist: true))
+        #expect(try roundTrip(request) == request)
+        let response = ResponseEnvelope(id: nil, result: .failure(error: error))
+        #expect(try roundTrip(response) == response)
+        let rejected = ServerHello.rejected(error: error)
+        #expect(try roundTrip(rejected) == rejected)
+    }
+
+    @Test func encodingHasStableKeys() throws {
+        #expect(try json(WireRequest.read(key: "on")) == #"{"read":{"key":"on"}}"#)
+        #expect(
+            try json(WireResult.failure(error: error))
+                == #"{"failure":{"error":{"code":"unknownControl","message":"No such control."}}}"#
+        )
+        #expect(try json(ServerHello.accepted) == #"{"accepted":{}}"#)
+    }
+}
