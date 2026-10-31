@@ -12,7 +12,7 @@ let package = Package(
         .macOS(.v15)
     ],
     products: [
-        .executable(name: "savestate", targets: ["savestate"])
+        .executable(name: "savestate", targets: ["SaveStateCLI"])
     ],
     dependencies: [
         // Named, so the dependency resolves however the repo folder is named
@@ -30,7 +30,7 @@ let package = Package(
             ]
         ),
         .executableTarget(
-            name: "savestate",
+            name: "SaveStateCLI",
             dependencies: [
                 "SaveStateBridgeKit",
                 .product(name: "ArgumentParser", package: "swift-argument-parser")

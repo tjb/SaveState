@@ -16,7 +16,8 @@ Two packages in one repo:
   - `SaveStateProtocol`: the versioned wire protocol shared with the bridge.
 - `CLI/Package.swift`: Mac-side tools. Third-party dependencies are allowed here.
   - `SaveStateBridgeKit`: bridge logic as a library, so a future Mac app can link it.
-  - `savestate`: the CLI executable (`savestate mcp` runs the MCP server).
+  - `SaveStateCLI`: the CLI target. Its product builds the `savestate` command
+    (`savestate mcp` runs the MCP server).
 
 ## Commands
 
@@ -36,6 +37,9 @@ xcodebuild build -scheme SaveState-Package \
   to `SaveState` or `SaveStateUI`. A server in a Release binary ends the project.
 - MCP lives only in the bridge. Apps speak `SaveStateProtocol`. Bump
   `WireProtocol.version` on any breaking message change.
+- Never give two targets, products, or folders names that differ only in letter
+  case (`savestate` vs `SaveState`). macOS filesystems are case-insensitive, so
+  their build paths collide at link time.
 - Control, action, probe, and scenario keys are stable identifiers. Labels are
   display text and are never matched on.
 - Tests use Swift Testing. Public API gets doc comments.
