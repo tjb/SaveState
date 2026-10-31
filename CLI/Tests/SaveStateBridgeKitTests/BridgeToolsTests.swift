@@ -184,7 +184,7 @@ struct BridgeToolsTests {
             ("flavor", .string("sour")),
             ("name", .string("Grace")),
             ("count", .int(3)),
-            ("ratio", .int(2)),
+            ("ratio", .double(0.25)),
             ("trial-end", .string("2027-01-15T08:00:00Z")),
             ("clock", .string("2027-01-15T08:00:00.250Z"))
         ]
@@ -198,7 +198,7 @@ struct BridgeToolsTests {
         #expect(model.flavor == .sour)
         #expect(model.name == "Grace")
         #expect(model.count == 3)
-        #expect(model.ratio == 2)
+        #expect(model.ratio == 0.25)
         #expect(model.trialEnd == Date(timeIntervalSince1970: 1_800_000_000))
         #expect(SaveStateClock.overrideDate == Date(timeIntervalSince1970: 1_800_000_000.25))
 
@@ -234,8 +234,44 @@ struct BridgeToolsTests {
         defer { endpoint.stop() }
 
         let result = await call("savestate_set", ["key": "flavor", "value": "sour"])
-
         #expect(text(result).contains("Relaunch"))
+
+        let persisted = await call("savestate_set", ["key": "flavor", "value": "sour", "persist": true])
+        #expect(text(persisted).contains("Relaunch"))
+        #expect(text(persisted).contains("persists"))
+    }
+
+    @Test func aWholeNumberCanArriveAsADouble() async throws {
+        let endpoint = try await start()
+        defer { endpoint.stop() }
+
+        #expect(await call("savestate_set", ["key": "count", "value": .double(3)]).isError != true)
+        #expect(model.count == 3)
+    }
+
+    @Test func aStringShapedLikeADataURLSetsAsText() async throws {
+        let endpoint = try await start()
+        defer { endpoint.stop() }
+        let url = "data:text/plain;base64,aGk="
+        // Decoded from JSON, because that's where the SDK turns it into data.
+        let value = try JSONDecoder().decode(Value.self, from: JSONEncoder().encode(url))
+
+        let result = await call("savestate_set", ["key": "name", "value": value])
+
+        #expect(result.isError != true, "\(text(result))")
+        #expect(model.name == url)
+    }
+
+    @Test func aMisspelledArgumentIsRejected() async throws {
+        let endpoint = try await start()
+        defer { endpoint.stop() }
+
+        let result = await call("savestate_set", ["key": "on", "value": true, "persisted": true])
+
+        #expect(result.isError == true)
+        #expect(text(result).contains("persisted"))
+        #expect(text(result).contains("persist,") || text(result).contains("persist."))
+        #expect(!model.isOn)
     }
 
     @Test(arguments: [
@@ -295,6 +331,66 @@ struct BridgeToolsTests {
         try write(stale, to: "dead")
 
         #expect(AppDiscovery.apps(on: [scratch.device]).isEmpty)
+    }
+
+    @Test func aReusedProcessIdentifierWithAClosedPortIsSkipped() async throws {
+        let endpoint = try await start()
+        var ghost = endpoint.info
+        // This process is alive, but nothing listens once the endpoint stops.
+        ghost.bundleIdentifier = "ghost.app"
+        endpoint.stop()
+        try write(ghost, to: "ghost")
+
+        #expect(AppDiscovery.apps(on: [scratch.device]).isEmpty)
+    }
+
+    @Test func aDeviceArgumentPicksBetweenSimulators() async throws {
+        let endpoint = try await start()
+        defer { endpoint.stop() }
+        let info = endpoint.info
+        let onFirst = DiscoveredApp(endpoint: info, deviceIdentifier: "FIRST")
+        var broken = info
+        broken.port = 1
+        let onSecond = DiscoveredApp(endpoint: broken, deviceIdentifier: "SECOND")
+        let tools = BridgeTools(timeout: .seconds(5)) { [onFirst, onSecond] }
+
+        let ambiguous = await tools.call("savestate_describe", arguments: [:])
+        #expect(ambiguous.isError == true)
+        #expect(text(ambiguous).contains("SECOND"))
+
+        let chosen = await tools.call("savestate_describe", arguments: ["device": "FIRST"])
+        #expect(chosen.isError != true)
+
+        let other = await tools.call("savestate_describe", arguments: ["device": "SECOND"])
+        #expect(other.isError == true)
+        #expect(text(other).contains("relaunch"))
+
+        let unknown = await tools.call("savestate_describe", arguments: ["device": "THIRD"])
+        #expect(unknown.isError == true)
+        #expect(text(unknown).contains("No running app"))
+    }
+
+    @Test func listingAppliesTheFilters() async throws {
+        let endpoint = try await start()
+        defer { endpoint.stop() }
+        let first = DiscoveredApp(endpoint: endpoint.info, deviceIdentifier: "FIRST")
+        let second = DiscoveredApp(endpoint: endpoint.info, deviceIdentifier: "SECOND")
+        let tools = BridgeTools(timeout: .seconds(5)) { [first, second] }
+
+        let result = await tools.call("savestate_list_apps", arguments: ["device": "SECOND"])
+
+        #expect(text(result).contains("SECOND"))
+        #expect(!text(result).contains("FIRST"))
+    }
+
+    @Test func aDiscoveryFailureIsReportedOnEveryTool() async {
+        let tools = BridgeTools(timeout: .seconds(5)) { throw BridgeError("Check that Xcode is installed.") }
+
+        for name in ["savestate_list_apps", "savestate_describe"] {
+            let result = await tools.call(name, arguments: [:])
+            #expect(result.isError == true)
+            #expect(text(result).contains("Xcode"))
+        }
     }
 
     @Test func severalAppsNeedAnAppArgument() async throws {
@@ -368,6 +464,34 @@ struct BridgeToolsTests {
 
 @Suite("Simulator listing")
 struct SimulatorListingTests {
+    @Test func aToolPastItsDeadlineIsStoppedAndReported() {
+        let start = ContinuousClock.now
+
+        #expect(throws: BridgeError.self) {
+            _ = try AppDiscovery.runTool(URL(fileURLWithPath: "/bin/sleep"), arguments: ["30"], deadline: 0.2)
+        }
+
+        #expect(ContinuousClock.now - start < .seconds(5))
+    }
+
+    @Test func aFailingToolIsReported() {
+        #expect(throws: BridgeError.self) {
+            _ = try AppDiscovery.runTool(URL(fileURLWithPath: "/usr/bin/false"), arguments: [])
+        }
+    }
+
+    @Test func aToolsOutputIsReturned() throws {
+        let data = try AppDiscovery.runTool(URL(fileURLWithPath: "/bin/echo"), arguments: ["hi"])
+
+        #expect(String(bytes: data, encoding: .utf8) == "hi\n")
+    }
+
+    @Test func malformedListingsThrow() {
+        #expect(throws: (any Error).self) {
+            _ = try AppDiscovery.parseDevices(Data("not json".utf8))
+        }
+    }
+
     @Test func keepsOnlyBootedDevices() throws {
         let json = """
         {"devices":{"iOS-27":[

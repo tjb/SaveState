@@ -44,7 +44,8 @@ public struct BridgeTools: Sendable {
             description: """
             Set one control. Values: true or false for toggles; true, false, or null (use the real \
             value) for tri-states; a listed option for choices; a string for text; a number for \
-            integers and decimals; an ISO 8601 date or null for dates and the clock. The change lasts \
+            integers and decimals; a date-time with a time zone, such as 2027-01-15T08:00:00Z, or null \
+            for dates and the clock. The change lasts \
             for this launch unless persist is true. A control that requires a relaunch keeps the value \
             through the next launch, so relaunching applies it once.
             """,
@@ -138,25 +139,40 @@ public struct BridgeTools: Sendable {
         }
     }
 
+    /// Rejects misspelled arguments. A client may not validate the schema, and a
+    /// quietly ignored `persisted` or `device_id` would do the wrong thing.
+    private func checkArguments(of name: String, _ arguments: [String: Value]) throws {
+        guard let tool = Self.definitions.first(where: { $0.name == name }),
+              let allowed = tool.inputSchema.objectValue?["properties"]?.objectValue?.keys
+        else { return }
+        let unknown = arguments.keys.filter { !allowed.contains($0) }.sorted()
+        guard unknown.isEmpty else {
+            throw BridgeError("""
+            \(name) doesn't take \(unknown.joined(separator: ", ")). It takes: \(allowed.sorted().joined(separator: ", ")).
+            """)
+        }
+    }
+
     private func perform(_ name: String, _ arguments: [String: Value]) async throws -> String {
+        try checkArguments(of: name, arguments)
         switch name {
         case "savestate_list_apps":
-            return try encode(try discover().map(AppListing.init))
+            return try encode(try matchingApps(arguments, in: try await runningApps()).map(AppListing.init))
         case "savestate_describe":
-            return try encode(try await registry(of: try selectApp(arguments)))
+            return try encode(try await registry(of: try await selectApp(arguments)))
         case "savestate_read":
-            let result = try await send(.read(key: try string("key", in: arguments)), to: try selectApp(arguments))
+            let result = try await send(.read(key: try string("key", in: arguments)), to: try await selectApp(arguments))
             guard case .control(let control) = result else { throw unexpected(result) }
             return try encode(control)
         case "savestate_set":
             return try await set(arguments)
         case "savestate_run_action":
             let key = try string("key", in: arguments)
-            try expectDone(try await send(.runAction(key: key), to: try selectApp(arguments)))
+            try expectDone(try await send(.runAction(key: key), to: try await selectApp(arguments)))
             return "Ran the action \"\(key)\"."
         case "savestate_apply_scenario":
             let key = try string("key", in: arguments)
-            try expectDone(try await send(.applyScenario(key: key), to: try selectApp(arguments)))
+            try expectDone(try await send(.applyScenario(key: key), to: try await selectApp(arguments)))
             return "Applied the scenario \"\(key)\"."
         default:
             throw BridgeError("There's no tool named \(name).")
@@ -175,7 +191,7 @@ public struct BridgeTools: Sendable {
             }
             persist = flag
         }
-        let app = try selectApp(arguments)
+        let app = try await selectApp(arguments)
         let description = try await registry(of: app)
         guard let control = description.controls.first(where: { $0.key == key }) else {
             let keys = description.controls.map(\.key).joined(separator: ", ")
@@ -183,15 +199,16 @@ public struct BridgeTools: Sendable {
         }
         let value = try ControlValueConversion.value(from: json, kind: control.kind)
         try expectDone(try await send(.set(key: key, value: value, persist: persist), to: app))
-        let lifetime: String
-        if persist {
-            lifetime = "It persists across relaunches until reset."
-        } else if control.requiresRelaunch {
-            lifetime = "Relaunch the app to apply it. It lasts through the next launch."
-        } else {
-            lifetime = "It lasts for this launch."
+        switch (persist, control.requiresRelaunch) {
+        case (true, true):
+            return "Set \"\(key)\". Relaunch the app to apply it. It persists across relaunches until reset."
+        case (true, false):
+            return "Set \"\(key)\". It persists across relaunches until reset."
+        case (false, true):
+            return "Set \"\(key)\". Relaunch the app to apply it. It lasts through the next launch."
+        case (false, false):
+            return "Set \"\(key)\". It lasts for this launch."
         }
-        return "Set \"\(key)\". \(lifetime)"
     }
 
     private func registry(of app: DiscoveredApp) async throws -> RegistryDescription {
@@ -214,20 +231,35 @@ public struct BridgeTools: Sendable {
         BridgeError("The app sent an unexpected response: \(result)")
     }
 
-    private func selectApp(_ arguments: [String: Value]) throws -> DiscoveredApp {
+    /// Runs discovery away from Swift's shared thread pool, because it blocks on
+    /// `simctl`.
+    private func runningApps() async throws -> [DiscoveredApp] {
+        let discover = discover
+        return try await withCheckedThrowingContinuation { continuation in
+            DispatchQueue.global().async {
+                continuation.resume(with: Result { try discover() })
+            }
+        }
+    }
+
+    private func matchingApps(_ arguments: [String: Value], in running: [DiscoveredApp]) throws -> [DiscoveredApp] {
         let requestedApp = try optionalString("app", in: arguments)
         let requestedDevice = try optionalString("device", in: arguments)
-        let running = try discover()
+        return running.filter { app in
+            (requestedApp == nil || app.endpoint.bundleIdentifier == requestedApp)
+                && (requestedDevice == nil || app.deviceIdentifier == requestedDevice)
+        }
+    }
+
+    private func selectApp(_ arguments: [String: Value]) async throws -> DiscoveredApp {
+        let running = try await runningApps()
         guard !running.isEmpty else {
             throw BridgeError("""
             No SaveState apps are running. Launch a Debug build in a booted simulator, and check that it \
             calls AgentEndpoint.start(registry:).
             """)
         }
-        let matches = running.filter { app in
-            (requestedApp == nil || app.endpoint.bundleIdentifier == requestedApp)
-                && (requestedDevice == nil || app.deviceIdentifier == requestedDevice)
-        }
+        let matches = try matchingApps(arguments, in: running)
         let listing = running
             .map { "\($0.endpoint.bundleIdentifier) on \($0.deviceIdentifier)" }
             .joined(separator: ", ")
@@ -300,6 +332,12 @@ enum ControlValueConversion {
             return .bool(flag)
         case (.string(let text), .date), (.string(let text), .clock):
             return ControlValue(iso8601Date: text)
+        case (.data, .text), (.data, .choice):
+            // The SDK decodes any string shaped like a data URL as data, so an agent
+            // can send one without meaning binary. Its own encoding restores the text.
+            return (try? JSONEncoder().encode(json))
+                .flatMap { try? JSONDecoder().decode(String.self, from: $0) }
+                .map(ControlValue.string)
         case (.string(let text), _):
             return .string(text)
         case (.int(let number), .decimal):
@@ -337,8 +375,8 @@ enum ControlValueConversion {
         case .text: return "a string"
         case .integer: return "a whole number"
         case .decimal: return "a number"
-        case .date: return "an ISO 8601 date, or null for the real value"
-        case .clock: return "an ISO 8601 date, or null for real time"
+        case .date: return "a date-time with a time zone, such as 2027-01-15T08:00:00Z, or null for the real value"
+        case .clock: return "a date-time with a time zone, such as 2027-01-15T08:00:00Z, or null for real time"
         }
     }
 

@@ -22,7 +22,13 @@ enum AppClient {
 
         return try await withThrowingTaskGroup(of: WireResult.self) { group in
             group.addTask {
-                try await exchange(request, over: task, app: app)
+                // The socket ignores task cancellation, and the group can't return
+                // until this finishes, so cancelling has to reach the socket.
+                try await withTaskCancellationHandler {
+                    try await exchange(request, over: task, app: app)
+                } onCancel: {
+                    task.cancel(with: .normalClosure, reason: nil)
+                }
             }
             group.addTask {
                 try await Task.sleep(for: timeout)
@@ -59,7 +65,18 @@ enum AppClient {
                 throw BridgeError("The app answered a different request.")
             }
             return response.result
-        } catch let error as URLError {
+        } catch let error as BridgeError {
+            throw error
+        } catch let error as WireError {
+            throw error
+        } catch is CancellationError {
+            throw CancellationError()
+        } catch is DecodingError {
+            throw BridgeError(
+                "\(app.endpoint.appName) sent a reply the bridge can't read. Rebuild the app and the bridge from the same SaveState version."
+            )
+        } catch {
+            // A closed socket arrives as a POSIX error, a refused one as a URLError.
             throw BridgeError(
                 "Couldn't reach \(app.endpoint.appName): \(error.localizedDescription) It may have quit: relaunch it."
             )

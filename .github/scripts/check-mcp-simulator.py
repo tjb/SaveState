@@ -10,6 +10,7 @@ import queue
 import subprocess
 import sys
 import threading
+import time
 
 BUNDLE = "dev.tjb.SaveStateDemo"
 
@@ -58,6 +59,23 @@ def expect(condition, message, detail=""):
     if not condition:
         raise SystemExit(f"FAILED: {message}\n{detail}")
     print(f"ok: {message}")
+
+
+def read_value(server, key):
+    failed, text = server.call("savestate_read", app=BUNDLE, key=key)
+    return None if failed else json.loads(text)["value"]
+
+
+def relaunch(server, udid):
+    """Relaunches the demo and waits for its new endpoint to answer."""
+    subprocess.run(["xcrun", "simctl", "terminate", udid, BUNDLE], check=True)
+    subprocess.run(["xcrun", "simctl", "launch", udid, BUNDLE], check=True, stdout=subprocess.DEVNULL)
+    for _ in range(40):
+        failed, _text = server.call("savestate_describe", app=BUNDLE)
+        if not failed:
+            return
+        time.sleep(0.5)
+    raise SystemExit("FAILED: the demo didn't come back after a relaunch")
 
 
 def main():
@@ -111,10 +129,17 @@ def main():
     expect(failed and "destructive" in text, "it refuses a destructive action", text)
 
     failed, text = server.call("savestate_set", app=BUNDLE, key="project-limit", value=9)
-    expect(not failed and "this launch" in text, "a set is scoped to this launch", text)
+    expect(not failed and "this launch" in text, "it sets a control", text)
+    expect(read_value(server, "project-limit") == {"type": "int", "value": 9}, "the app holds the new value")
 
     if len(sys.argv) > 3:
         subprocess.run(["xcrun", "simctl", "io", udid, "screenshot", sys.argv[3]], check=True)
+
+    relaunch(server, udid)
+    expect(
+        read_value(server, "project-limit") == {"type": "int", "value": 3},
+        "a session write is gone after a relaunch",
+    )
 
     server.process.stdin.close()
     server.process.terminate()
