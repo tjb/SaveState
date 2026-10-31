@@ -18,6 +18,18 @@ public enum Bridge {
     /// It serves `savestate_list_apps`, `savestate_describe`, `savestate_set`,
     /// `savestate_run_action`, `savestate_apply_scenario`, and `savestate_read`.
     public static func runMCPServer(tools: BridgeTools = BridgeTools()) async throws {
+        try await serve(tools: tools, over: StdioTransport())
+    }
+
+    /// Serves the tools over a transport until the client disconnects.
+    static func serve(tools: BridgeTools, over transport: any Transport) async throws {
+        let server = await makeServer(tools: tools)
+        try await server.start(transport: transport)
+        await server.waitUntilCompleted()
+    }
+
+    /// Creates a server with the tools' handlers registered, not yet connected.
+    static func makeServer(tools: BridgeTools) async -> Server {
         let server = Server(
             name: "savestate",
             version: version,
@@ -29,7 +41,6 @@ public enum Bridge {
         await server.withMethodHandler(CallTool.self) { parameters in
             await tools.call(parameters.name, arguments: parameters.arguments ?? [:])
         }
-        try await server.start(transport: StdioTransport())
-        await server.waitUntilCompleted()
+        return server
     }
 }

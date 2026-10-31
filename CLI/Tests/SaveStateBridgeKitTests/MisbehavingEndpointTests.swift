@@ -7,7 +7,7 @@ import Testing
 
 /// A loopback server that misbehaves on demand, to reach failures the real endpoint
 /// can't produce.
-private final class FakeEndpoint: Sendable {
+final class FakeEndpoint: Sendable {
     enum Behavior: Sendable {
         /// Accepts TCP and never completes the WebSocket upgrade, the way an app with
         /// a blocked main queue looks.
@@ -24,6 +24,10 @@ private final class FakeEndpoint: Sendable {
         case answers(ResponseEnvelope)
         /// Accepts the hello, then hangs up when the request arrives.
         case closesAfterRequest
+        /// Accepts the hello, then answers with something that isn't JSON.
+        case garbageResponse
+        /// Accepts the hello, then answers with this envelope in a binary frame.
+        case answersInBinary(ResponseEnvelope)
     }
 
     private let listener: NWListener
@@ -89,13 +93,16 @@ private final class FakeEndpoint: Sendable {
             switch (behavior, step) {
             case (.closesAfterHello, _), (.closesAfterRequest, 1):
                 connection.cancel()
-            case (.garbageHello, _):
+            case (.garbageHello, _), (.garbageResponse, 1):
                 send(Data("not json".utf8), on: connection)
             case (.rejects(let wireError), _):
                 send(ServerHello.rejected(error: wireError), on: connection)
-            case (.answers, 0), (.closesAfterRequest, 0):
+            case (.answers, 0), (.closesAfterRequest, 0), (.garbageResponse, 0), (.answersInBinary, 0):
                 send(ServerHello.accepted, on: connection)
                 serve(connection, behavior: behavior, step: 1)
+            case (.answersInBinary(let envelope), _):
+                guard let data = try? JSONEncoder().encode(envelope) else { return }
+                send(data, on: connection, opcode: .binary)
             case (.answers(let envelope), _):
                 send(envelope, on: connection)
             default:
@@ -109,8 +116,8 @@ private final class FakeEndpoint: Sendable {
         send(data, on: connection)
     }
 
-    private static func send(_ data: Data, on connection: NWConnection) {
-        let metadata = NWProtocolWebSocket.Metadata(opcode: .text)
+    private static func send(_ data: Data, on connection: NWConnection, opcode: NWProtocolWebSocket.Opcode = .text) {
+        let metadata = NWProtocolWebSocket.Metadata(opcode: opcode)
         let context = NWConnection.ContentContext(identifier: "message", metadata: [metadata])
         connection.send(content: data, contentContext: context, isComplete: true, completion: .idempotent)
     }
@@ -128,12 +135,14 @@ private func text(_ result: CallTool.Result) -> String {
 struct MisbehavingEndpointTests {
     private func call(
         _ behavior: FakeEndpoint.Behavior,
-        timeout: Duration = .seconds(5)
+        timeout: Duration = .seconds(5),
+        tool: String = "savestate_describe",
+        arguments: [String: Value] = [:]
     ) async throws -> CallTool.Result {
         let endpoint = try await FakeEndpoint(behavior)
         let app = endpoint.app()
         let tools = BridgeTools(timeout: timeout) { [app] }
-        let result = await tools.call("savestate_describe", arguments: [:])
+        let result = await tools.call(tool, arguments: arguments)
         _ = endpoint
         return result
     }
@@ -235,5 +244,136 @@ struct MisbehavingEndpointTests {
 
         #expect(result.isError == true)
         #expect(text(result).contains("unexpected response"))
+    }
+
+    @Test func aGarbledResponseAfterTheHelloSaysToRebuild() async throws {
+        let result = try await call(.garbageResponse)
+
+        #expect(result.isError == true)
+        #expect(text(result).contains("Rebuild"), "\(text(result))")
+    }
+
+    @Test func aBinaryFrameIsReadTheSameAsText() async throws {
+        let registry = RegistryDescription(controls: [], actions: [], scenarios: [])
+        let envelope = ResponseEnvelope(id: 1, result: .description(registry: registry))
+
+        let result = try await call(.answersInBinary(envelope))
+
+        #expect(result.isError != true, "\(text(result))")
+        #expect(text(result).contains("scenarios"))
+    }
+
+    @Test func aReadAnsweredWithTheWrongResultIsReported() async throws {
+        let result = try await call(.answers(ResponseEnvelope(id: 1, result: .done)), tool: "savestate_read", arguments: ["key": "on"])
+
+        #expect(result.isError == true)
+        #expect(text(result).contains("unexpected response"))
+    }
+
+    @Test func anActionAnsweredWithTheWrongResultIsNotReportedAsRun() async throws {
+        let wrong = ResponseEnvelope(id: 1, result: .description(registry: RegistryDescription(controls: [], actions: [], scenarios: [])))
+
+        let result = try await call(.answers(wrong), tool: "savestate_run_action", arguments: ["key": "run"])
+
+        #expect(result.isError == true)
+        #expect(text(result).contains("unexpected response"))
+    }
+
+    @Test func aScenarioAnsweredWithTheWrongResultIsNotReportedAsApplied() async throws {
+        let wrong = ResponseEnvelope(id: 1, result: .description(registry: RegistryDescription(controls: [], actions: [], scenarios: [])))
+
+        let result = try await call(.answers(wrong), tool: "savestate_apply_scenario", arguments: ["key": "expired-trial"])
+
+        #expect(result.isError == true)
+        #expect(!text(result).contains("Applied"))
+    }
+
+    @Test func aRequestFailureOfAnyOtherCodeKeepsTheAppsOwnMessage() async throws {
+        let failure = ResponseEnvelope(id: 1, result: .failure(error: WireError(code: .unknownScenario, message: "No scenario has the key.")))
+
+        let result = try await call(.answers(failure), tool: "savestate_apply_scenario", arguments: ["key": "nope"])
+
+        #expect(result.isError == true)
+        #expect(text(result) == "No scenario has the key.")
+    }
+}
+
+/// How `BridgeTools` reports failures that don't come from an app.
+@Suite("Bridge tool arguments and failures")
+struct BridgeToolFailureTests {
+    private struct Unexpected: Error, CustomStringConvertible {
+        var description: String { "something unexpected" }
+    }
+
+    private func app(protocolVersion: Int = WireProtocol.version) -> DiscoveredApp {
+        DiscoveredApp(
+            endpoint: EndpointInfo(
+                protocolVersion: protocolVersion,
+                port: 1,
+                token: "t",
+                bundleIdentifier: "one.app",
+                appName: "One",
+                processIdentifier: 1
+            ),
+            deviceIdentifier: "DEVICE"
+        )
+    }
+
+    @Test func aNonStringAppArgumentIsRejected() async {
+        let running = app()
+        let tools = BridgeTools(timeout: .seconds(1)) { [running] }
+
+        let result = await tools.call("savestate_list_apps", arguments: ["app": 3])
+
+        #expect(result.isError == true)
+        #expect(text(result) == "app must be a string.")
+    }
+
+    @Test func aNonStringKeyIsRejected() async {
+        let tools = BridgeTools(timeout: .seconds(1)) { [] }
+
+        let result = await tools.call("savestate_read", arguments: ["key": 3])
+
+        #expect(text(result) == "key must be a string.")
+    }
+
+    @Test func aMissingKeyIsRejectedBeforeAnyAppIsContacted() async {
+        let tools = BridgeTools(timeout: .seconds(1)) { [] }
+
+        let result = await tools.call("savestate_apply_scenario", arguments: [:])
+
+        #expect(text(result) == "This tool needs key.")
+    }
+
+    @Test func anUnknownErrorIsStillAnErrorResult() async {
+        let tools = BridgeTools(timeout: .seconds(1)) { throw Unexpected() }
+
+        let result = await tools.call("savestate_list_apps", arguments: [:])
+
+        #expect(result.isError == true)
+        #expect(text(result) == "something unexpected")
+    }
+
+    @Test func aFutureAppIsStillListedSoTheAgentCanSeeIt() async {
+        let future = app(protocolVersion: WireProtocol.version + 1)
+        let tools = BridgeTools(timeout: .seconds(1)) { [future] }
+
+        let result = await tools.call("savestate_list_apps", arguments: [:])
+
+        #expect(result.isError != true)
+        #expect(text(result).contains("one.app"))
+    }
+
+    @Test func listingSeveralAppsNeedsNoArgument() async {
+        let first = app()
+        var second = app()
+        second.endpoint.bundleIdentifier = "two.app"
+        let running = [first, second]
+        let tools = BridgeTools(timeout: .seconds(1)) { running }
+
+        let result = await tools.call("savestate_list_apps", arguments: [:])
+
+        #expect(text(result).contains("one.app"))
+        #expect(text(result).contains("two.app"))
     }
 }

@@ -455,6 +455,46 @@ struct BridgeToolsTests {
         #expect(text(result).contains("relaunch"))
     }
 
+    // MARK: - Through a real MCP client
+
+    // These live in this serialized suite because a new AgentEndpoint replaces the
+    // process's running one.
+    private func connectedClient() async throws -> (Client, Server) {
+        let (clientSide, serverSide) = await InMemoryTransport.createConnectedPair()
+        let server = await Bridge.makeServer(tools: tools)
+        try await server.start(transport: serverSide)
+        let client = Client(name: "test", version: "1")
+        _ = try await client.connect(transport: clientSide)
+        return (client, server)
+    }
+
+    @Test func anAgentAppliesAScenarioOverMCP() async throws {
+        let endpoint = try await start()
+        defer { endpoint.stop() }
+        let (client, server) = try await connectedClient()
+
+        let (_, isError) = try await client.callTool(name: "savestate_apply_scenario", arguments: ["key": "expired-trial"])
+
+        #expect(isError != true)
+        #expect(model.premium == false)
+        await client.disconnect()
+        await server.stop()
+    }
+
+    @Test func aDataURLStringSurvivesTheMCPWireAsText() async throws {
+        let endpoint = try await start()
+        defer { endpoint.stop() }
+        let (client, server) = try await connectedClient()
+        let url = "data:text/plain;base64,aGk="
+
+        let (_, isError) = try await client.callTool(name: "savestate_set", arguments: ["key": "name", "value": .string(url)])
+
+        #expect(isError != true)
+        #expect(model.name == url)
+        await client.disconnect()
+        await server.stop()
+    }
+
     private func write(_ info: EndpointInfo, to container: String) throws {
         let file = scratch.container(container).appendingPathComponent(EndpointInfo.relativePath)
         try FileManager.default.createDirectory(at: file.deletingLastPathComponent(), withIntermediateDirectories: true)
