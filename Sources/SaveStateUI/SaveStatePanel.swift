@@ -1,22 +1,28 @@
+import Observation
 import SaveState
 import SwiftUI
 
 /// The debug panel: every control in a registry, then its actions and scenarios.
 ///
-/// ``SaveStateOverlay`` presents it in a popover. Use it directly to show the
-/// panel somewhere else, such as a settings screen. Changes made here persist
-/// across relaunches until they're reset. It shows nothing when the registry is
-/// disabled.
+/// ``SaveStateOverlay`` presents it in a popover. It has a fixed width and scrolls
+/// its own content, so if you present it yourself, use a popover or sheet rather
+/// than embedding it in a list. Changes made here persist across relaunches until
+/// they're reset. It shows nothing when the registry is disabled.
 public struct SaveStatePanel: View {
     private let registry: SaveStateRegistry
 
-    @State private var message: PanelMessage?
-    @State private var runningKey: String?
+    @State private var runState: PanelRunState
+    @State private var resetAllCount = 0
     @State private var actionToConfirm: ActionDescription?
 
     /// Creates the panel for a registry.
     public init(registry: SaveStateRegistry) {
+        self.init(registry: registry, runState: PanelRunState())
+    }
+
+    init(registry: SaveStateRegistry, runState: PanelRunState) {
         self.registry = registry
+        _runState = State(initialValue: runState)
     }
 
     public var body: some View {
@@ -28,7 +34,7 @@ public struct SaveStatePanel: View {
     private func panel(_ description: RegistryDescription) -> some View {
         VStack(alignment: .leading, spacing: 12) {
             header(changedCount: description.controls.filter(\.isChanged).count)
-            if let message {
+            if let message = runState.message {
                 messageLabel(message)
             }
             ScrollView {
@@ -121,6 +127,7 @@ public struct SaveStatePanel: View {
                 ForEach(group.items, id: \.key) { control in
                     ControlRow(
                         control: control,
+                        resetAllCount: resetAllCount,
                         change: { change($0, of: control) },
                         reset: { reset(control) }
                     )
@@ -159,14 +166,14 @@ public struct SaveStatePanel: View {
                     // Glass buttons don't color destructive roles themselves.
                     .foregroundStyle(action.isDestructive ? .red : .primary)
                 Spacer()
-                if runningKey == action.key {
+                if runState.runningKey == action.key {
                     ProgressView().controlSize(.small)
                 }
             }
             .frame(maxWidth: .infinity)
         }
         .overlayPanelButtonStyle()
-        .disabled(runningKey != nil)
+        .disabled(runState.runningKey != nil)
         .accessibilityIdentifier("saveState.action.\(action.key)")
     }
 
@@ -203,7 +210,7 @@ public struct SaveStatePanel: View {
                     }
                 }
                 Spacer()
-                if runningKey == scenario.key {
+                if runState.runningKey == scenario.key {
                     ProgressView().controlSize(.small)
                 }
             }
@@ -211,7 +218,7 @@ public struct SaveStatePanel: View {
         }
         .overlayPanelButtonStyle()
         .buttonBorderShape(.roundedRectangle(radius: 12))
-        .disabled(runningKey != nil)
+        .disabled(runState.runningKey != nil)
         .accessibilityIdentifier("saveState.scenario.\(scenario.key)")
     }
 
@@ -233,14 +240,15 @@ public struct SaveStatePanel: View {
 
     private func resetAll() {
         perform { try registry.resetAll() }
+        resetAllCount += 1
     }
 
     private func perform(_ change: () throws -> Void) {
         do {
             try change()
-            message = nil
+            runState.message = nil
         } catch {
-            message = PanelMessage(text: String(describing: error), isError: true)
+            runState.message = PanelMessage(text: String(describing: error), isError: true)
         }
     }
 
@@ -261,22 +269,34 @@ public struct SaveStatePanel: View {
         success: String,
         work: @escaping @MainActor () async throws -> Void
     ) {
-        runningKey = key
-        message = nil
-        Task {
-            defer { runningKey = nil }
+        runState.runningKey = key
+        runState.message = nil
+        // Captures the run state rather than the view, so a run that outlasts
+        // the popover still reports to the panel when it reopens.
+        Task { [runState] in
+            defer { runState.runningKey = nil }
             do {
                 try await work()
-                message = PanelMessage(text: success, isError: false)
+                runState.message = PanelMessage(text: success, isError: false)
             } catch {
-                message = PanelMessage(text: String(describing: error), isError: true)
+                runState.message = PanelMessage(text: String(describing: error), isError: true)
             }
         }
     }
 }
 
 /// A line at the top of the panel reporting how the last operation went.
-private struct PanelMessage {
+struct PanelMessage {
     let text: String
     let isError: Bool
+}
+
+/// The action or scenario in progress and how the last one went. It outlives the
+/// popover, so closing and reopening the panel can't start a second run or lose a
+/// failure.
+@MainActor
+@Observable
+final class PanelRunState {
+    var runningKey: String?
+    var message: PanelMessage?
 }

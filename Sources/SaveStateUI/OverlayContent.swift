@@ -25,16 +25,6 @@ struct OverlayGroup<Item>: Identifiable {
     }
 }
 
-extension ControlDescription {
-    /// Whether the control has anything to reset: its value differs from its
-    /// default, or a later launch would restore a value that does.
-    var isChanged: Bool {
-        if value != defaultValue { return true }
-        guard let nextLaunchValue else { return false }
-        return nextLaunchValue != defaultValue
-    }
-}
-
 /// Converts between the text in an editor and a control's value.
 enum ControlText {
     /// The text an editor shows for a value.

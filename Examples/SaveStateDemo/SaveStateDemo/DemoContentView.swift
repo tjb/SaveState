@@ -39,7 +39,7 @@ struct DemoContentView: View {
                 .accessibilityIdentifier("demo.premium")
         } else if state.trialEnd > now {
             Label(
-                "Trial ends \(state.trialEnd.formatted(.relative(presentation: .named, unitsStyle: .wide)))",
+                "Trial ends \(RelativeDateTimeFormatter().localizedString(for: state.trialEnd, relativeTo: now))",
                 systemImage: "hourglass"
             )
             .accessibilityIdentifier("demo.trial")

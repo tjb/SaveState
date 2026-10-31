@@ -7,9 +7,7 @@ private func control(
     key: String = "key",
     section: String? = nil,
     kind: ControlKind = .toggle,
-    value: ControlValue = .bool(false),
-    defaultValue: ControlValue = .bool(false),
-    nextLaunchValue: ControlValue? = nil
+    value: ControlValue = .bool(false)
 ) -> ControlDescription {
     ControlDescription(
         key: key,
@@ -19,9 +17,10 @@ private func control(
         value: value,
         realValue: nil,
         effectiveValue: value,
-        defaultValue: defaultValue,
+        defaultValue: value,
         requiresRelaunch: false,
-        nextLaunchValue: nextLaunchValue
+        nextLaunchValue: nil,
+        isChanged: false
     )
 }
 
@@ -41,19 +40,6 @@ struct OverlayContentTests {
 
         #expect(groups.map(\.title) == ["One", nil, "Two"])
         #expect(groups.map { $0.items.map(\.key) } == [["a", "d"], ["b", "e"], ["c"]])
-    }
-
-    @Test func aControlAtItsDefaultIsUnchanged() {
-        #expect(!control().isChanged)
-        #expect(!control(nextLaunchValue: .bool(false)).isChanged)
-    }
-
-    @Test func aDifferentValueIsChanged() {
-        #expect(control(value: .bool(true)).isChanged)
-    }
-
-    @Test func aStoredValueThatWouldReturnNextLaunchIsChanged() {
-        #expect(control(nextLaunchValue: .bool(true)).isChanged)
     }
 }
 

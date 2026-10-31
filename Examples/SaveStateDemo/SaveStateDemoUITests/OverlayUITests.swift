@@ -109,6 +109,19 @@ final class OverlayUITests: XCTestCase {
         XCTAssertFalse(element("saveState.changed.project-limit").exists)
     }
 
+    func testResetAllDiscardsAnUnappliedDraft() {
+        scroll(to: "saveState.control.tips")
+        let tips = app.switches["saveState.control.tips"]
+        tips.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5)).tap()
+        scroll(to: "saveState.control.greeting")
+        let field = app.textFields["saveState.control.greeting"]
+        field.tap()
+        field.typeText("!")
+        app.buttons["saveState.resetAll"].tap()
+        closePanel()
+        XCTAssertTrue(app.staticTexts["Greeting, Welcome back"].waitForExistence(timeout: 5))
+    }
+
     func testDestructiveActionAsksFirst() {
         scroll(to: "saveState.action.seed")
         app.buttons["saveState.action.seed"].tap()

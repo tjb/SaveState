@@ -46,6 +46,9 @@ public struct ControlDescription: Codable, Hashable, Sendable {
     /// The value the app's next launch restores, or `nil` when the next launch
     /// starts from the default.
     public var nextLaunchValue: ControlValue?
+    /// Whether the control has anything to reset: its value differs from its
+    /// default, or a stored value that differs would return at a later launch.
+    public var isChanged: Bool
 
     /// Creates a control's snapshot.
     public init(
@@ -58,7 +61,8 @@ public struct ControlDescription: Codable, Hashable, Sendable {
         effectiveValue: ControlValue,
         defaultValue: ControlValue,
         requiresRelaunch: Bool,
-        nextLaunchValue: ControlValue?
+        nextLaunchValue: ControlValue?,
+        isChanged: Bool
     ) {
         self.key = key
         self.label = label
@@ -70,6 +74,7 @@ public struct ControlDescription: Codable, Hashable, Sendable {
         self.defaultValue = defaultValue
         self.requiresRelaunch = requiresRelaunch
         self.nextLaunchValue = nextLaunchValue
+        self.isChanged = isChanged
     }
 }
 

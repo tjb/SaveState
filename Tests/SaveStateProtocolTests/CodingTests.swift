@@ -121,7 +121,8 @@ struct CodingTests {
                     effectiveValue: .bool(true),
                     defaultValue: .null,
                     requiresRelaunch: false,
-                    nextLaunchValue: nil
+                    nextLaunchValue: nil,
+                    isChanged: false
                 ),
                 ControlDescription(
                     key: "env",
@@ -133,7 +134,8 @@ struct CodingTests {
                     effectiveValue: .string("production"),
                     defaultValue: .string("production"),
                     requiresRelaunch: true,
-                    nextLaunchValue: .string("staging")
+                    nextLaunchValue: .string("staging"),
+                    isChanged: false
                 ),
             ],
             actions: [

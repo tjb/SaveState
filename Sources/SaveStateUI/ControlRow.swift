@@ -4,8 +4,11 @@ import SwiftUI
 /// One control: its label, its markers, a reset button, and its editor.
 struct ControlRow: View {
     let control: ControlDescription
+    let resetAllCount: Int
     let change: (ControlValue) -> Void
     let reset: () -> Void
+
+    @State private var resetCount = 0
 
     var body: some View {
         VStack(alignment: .leading, spacing: 6) {
@@ -37,7 +40,7 @@ struct ControlRow: View {
                             .accessibilityIdentifier("saveState.changed.\(control.key)")
                     }
                     if control.requiresRelaunch {
-                        Label("Needs relaunch", systemImage: "arrow.clockwise.circle")
+                        Label("Applies on relaunch", systemImage: "arrow.clockwise.circle")
                             .foregroundStyle(.secondary)
                             .accessibilityIdentifier("saveState.relaunch.\(control.key)")
                     }
@@ -48,7 +51,10 @@ struct ControlRow: View {
     }
 
     private var resetButton: some View {
-        Button(action: reset) {
+        Button {
+            reset()
+            resetCount += 1
+        } label: {
             Label("Reset \(control.label)", systemImage: "arrow.uturn.backward")
                 .labelStyle(.iconOnly)
                 .font(.caption)
@@ -87,7 +93,12 @@ struct ControlRow: View {
         case .triState:
             TriStateEditor(control: control, change: change, identifier: editorIdentifier)
         case .text, .integer, .decimal:
-            TextEditorField(control: control, change: change, identifier: editorIdentifier)
+            TextEditorField(
+                control: control,
+                resetToken: resetCount + resetAllCount,
+                change: change,
+                identifier: editorIdentifier
+            )
         case .date:
             DateEditor(control: control, change: change, identifier: editorIdentifier)
         case .clock:
@@ -154,6 +165,9 @@ private struct TriStateEditor: View {
 /// app or storage.
 private struct TextEditorField: View {
     let control: ControlDescription
+    /// Changes on each reset, which discards the draft even when the reset
+    /// leaves the value as it was.
+    let resetToken: Int
     let change: (ControlValue) -> Void
     let identifier: String
 
@@ -161,8 +175,14 @@ private struct TextEditorField: View {
     @State private var isInvalid = false
     @FocusState private var isFocused: Bool
 
-    init(control: ControlDescription, change: @escaping (ControlValue) -> Void, identifier: String) {
+    init(
+        control: ControlDescription,
+        resetToken: Int,
+        change: @escaping (ControlValue) -> Void,
+        identifier: String
+    ) {
         self.control = control
+        self.resetToken = resetToken
         self.change = change
         self.identifier = identifier
         _draft = State(initialValue: ControlText.text(for: control.value))
@@ -179,6 +199,10 @@ private struct TextEditorField: View {
                 }
                 .onChange(of: control.value) { _, value in
                     draft = ControlText.text(for: value)
+                    isInvalid = false
+                }
+                .onChange(of: resetToken) {
+                    draft = ControlText.text(for: control.value)
                     isInvalid = false
                 }
                 .onDisappear(perform: applyDraft)

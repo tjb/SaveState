@@ -8,6 +8,7 @@ import SwiftUI
 public struct SaveStateOverlay: View {
     private let registry: SaveStateRegistry
     @State private var isPanelPresented = false
+    @State private var runState = PanelRunState()
 
     /// Creates the button for a registry.
     public init(registry: SaveStateRegistry) {
@@ -27,7 +28,7 @@ public struct SaveStateOverlay: View {
             .accessibilityValue(accessibilityValue)
             .accessibilityIdentifier("saveState.button")
             .popover(isPresented: $isPanelPresented) {
-                SaveStatePanel(registry: registry)
+                SaveStatePanel(registry: registry, runState: runState)
                     .presentationCompactAdaptation(.popover)
                     .overlayPanelBackground()
             }
