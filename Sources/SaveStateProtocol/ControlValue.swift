@@ -24,6 +24,15 @@ public enum ControlValue: Sendable {
     case date(Date)
 }
 
+public extension ControlValue {
+    /// A `.date` parsed from an ISO 8601 string with or without fractional
+    /// seconds, or `nil` when the string isn't one.
+    init?(iso8601Date text: String) {
+        guard let date = DateCoding.date(from: text) else { return nil }
+        self = .date(date)
+    }
+}
+
 extension ControlValue: Hashable {
     /// Compares values of the same case. Dates compare at millisecond precision.
     public static func == (lhs: ControlValue, rhs: ControlValue) -> Bool {

@@ -9,8 +9,8 @@ and named **scenarios** that set many of them at once, such as `expired-trial` o
 `power-user`. SaveState renders that registry as a debug overlay for people and
 serves it over MCP for agents, in Debug builds only.
 
-> **Status:** pre-alpha. The registry, clock, overlay, and simulator endpoint are
-> in place; the MCP tools are under development for v0.1. APIs will change.
+> **Status:** pre-alpha. The registry, clock, overlay, simulator endpoint, and MCP
+> tools are in place for v0.1. APIs will change.
 
 ## Why
 
@@ -94,6 +94,20 @@ Task { try? await AgentEndpoint.start(registry: registry) }
 
 It runs in the simulator, on the loopback interface, and each connection must
 present a token that's new at each launch. Nothing listens on a physical device.
+
+### Connecting an agent
+
+Build the bridge, then add `savestate mcp` to your agent as a stdio MCP server:
+
+```bash
+(cd CLI && swift build -c release)
+claude mcp add savestate -- "$PWD/CLI/.build/release/savestate" mcp
+```
+
+With a Debug build of your app running in a booted simulator, the agent gets
+`savestate_list_apps`, `savestate_describe`, `savestate_set`,
+`savestate_run_action`, `savestate_apply_scenario`, and `savestate_read`.
+Destructive actions are refused, so a person has to run those.
 
 ### Coming from PremiumToggle
 

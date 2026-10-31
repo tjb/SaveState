@@ -15,17 +15,19 @@ public enum Bridge {
 
     /// Runs an MCP server over stdio until the client disconnects.
     ///
-    /// It advertises no tools yet. v0.1 adds `savestate_list_apps`,
-    /// `savestate_describe`, `savestate_set`, `savestate_run_action`,
-    /// `savestate_apply_scenario`, and `savestate_read`.
-    public static func runMCPServer() async throws {
+    /// It serves `savestate_list_apps`, `savestate_describe`, `savestate_set`,
+    /// `savestate_run_action`, `savestate_apply_scenario`, and `savestate_read`.
+    public static func runMCPServer(tools: BridgeTools = BridgeTools()) async throws {
         let server = Server(
             name: "savestate",
             version: version,
             capabilities: .init(tools: .init(listChanged: false))
         )
         await server.withMethodHandler(ListTools.self) { _ in
-            .init(tools: [])
+            .init(tools: BridgeTools.definitions)
+        }
+        await server.withMethodHandler(CallTool.self) { parameters in
+            await tools.call(parameters.name, arguments: parameters.arguments ?? [:])
         }
         try await server.start(transport: StdioTransport())
         await server.waitUntilCompleted()

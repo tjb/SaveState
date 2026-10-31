@@ -1,0 +1,239 @@
+import Foundation
+import MCP
+import Network
+import SaveStateProtocol
+import Testing
+@testable import SaveStateBridgeKit
+
+/// A loopback server that misbehaves on demand, to reach failures the real endpoint
+/// can't produce.
+private final class FakeEndpoint: Sendable {
+    enum Behavior: Sendable {
+        /// Accepts TCP and never completes the WebSocket upgrade, the way an app with
+        /// a blocked main queue looks.
+        case neverUpgrades
+        /// Upgrades, then never answers, the way an app stopped in a debugger looks.
+        case silent
+        /// Upgrades, then hangs up when the hello arrives.
+        case closesAfterHello
+        /// Answers the hello with something that isn't JSON.
+        case garbageHello
+        /// Rejects the hello with this error.
+        case rejects(WireError)
+        /// Accepts the hello, then answers with this envelope.
+        case answers(ResponseEnvelope)
+        /// Accepts the hello, then hangs up when the request arrives.
+        case closesAfterRequest
+    }
+
+    private let listener: NWListener
+    private let queue = DispatchQueue(label: "FakeEndpoint")
+    let port: UInt16
+
+    init(_ behavior: Behavior) async throws {
+        let parameters: NWParameters
+        if case .neverUpgrades = behavior {
+            parameters = .tcp
+        } else {
+            parameters = .tcp
+            parameters.defaultProtocolStack.applicationProtocols.insert(NWProtocolWebSocket.Options(), at: 0)
+        }
+        parameters.requiredLocalEndpoint = .hostPort(host: .ipv4(.loopback), port: .any)
+        let listener = try NWListener(using: parameters)
+        self.listener = listener
+        let queue = queue
+        listener.newConnectionHandler = { connection in
+            connection.start(queue: queue)
+            Self.serve(connection, behavior: behavior, step: 0)
+        }
+        port = try await withCheckedThrowingContinuation { continuation in
+            nonisolated(unsafe) var pending: CheckedContinuation<UInt16, any Error>? = continuation
+            listener.stateUpdateHandler = { state in
+                switch state {
+                case .ready:
+                    pending?.resume(returning: listener.port?.rawValue ?? 0)
+                    pending = nil
+                case .failed(let error):
+                    pending?.resume(throwing: error)
+                    pending = nil
+                default:
+                    break
+                }
+            }
+            listener.start(queue: queue)
+        }
+    }
+
+    deinit {
+        listener.cancel()
+    }
+
+    func app() -> DiscoveredApp {
+        DiscoveredApp(
+            endpoint: EndpointInfo(
+                protocolVersion: WireProtocol.version,
+                port: port,
+                token: "token",
+                bundleIdentifier: "fake.app",
+                appName: "Fake",
+                processIdentifier: ProcessInfo.processInfo.processIdentifier
+            ),
+            deviceIdentifier: "DEVICE"
+        )
+    }
+
+    private static func serve(_ connection: NWConnection, behavior: Behavior, step: Int) {
+        if case .neverUpgrades = behavior { return }
+        connection.receiveMessage { _, _, _, error in
+            guard error == nil else { return }
+            switch (behavior, step) {
+            case (.closesAfterHello, _), (.closesAfterRequest, 1):
+                connection.cancel()
+            case (.garbageHello, _):
+                send(Data("not json".utf8), on: connection)
+            case (.rejects(let wireError), _):
+                send(ServerHello.rejected(error: wireError), on: connection)
+            case (.answers, 0), (.closesAfterRequest, 0):
+                send(ServerHello.accepted, on: connection)
+                serve(connection, behavior: behavior, step: 1)
+            case (.answers(let envelope), _):
+                send(envelope, on: connection)
+            default:
+                break
+            }
+        }
+    }
+
+    private static func send(_ message: some Encodable, on connection: NWConnection) {
+        guard let data = try? JSONEncoder().encode(message) else { return }
+        send(data, on: connection)
+    }
+
+    private static func send(_ data: Data, on connection: NWConnection) {
+        let metadata = NWProtocolWebSocket.Metadata(opcode: .text)
+        let context = NWConnection.ContentContext(identifier: "message", metadata: [metadata])
+        connection.send(content: data, contentContext: context, isComplete: true, completion: .idempotent)
+    }
+}
+
+private func text(_ result: CallTool.Result) -> String {
+    result.content.compactMap { content -> String? in
+        if case .text(let text, _, _) = content { return text }
+        return nil
+    }
+    .joined()
+}
+
+@Suite("Misbehaving endpoints")
+struct MisbehavingEndpointTests {
+    private func call(
+        _ behavior: FakeEndpoint.Behavior,
+        timeout: Duration = .seconds(5)
+    ) async throws -> CallTool.Result {
+        let endpoint = try await FakeEndpoint(behavior)
+        let app = endpoint.app()
+        let tools = BridgeTools(timeout: timeout) { [app] }
+        let result = await tools.call("savestate_describe", arguments: [:])
+        _ = endpoint
+        return result
+    }
+
+    @Test func aSilentAppTimesOutOnTime() async throws {
+        let start = ContinuousClock.now
+
+        let result = try await call(.silent, timeout: .seconds(1))
+
+        #expect(result.isError == true)
+        #expect(text(result).contains("didn't answer in time"))
+        #expect(ContinuousClock.now - start < .seconds(5))
+    }
+
+    @Test func anAppThatNeverUpgradesTimesOutOnTime() async throws {
+        let start = ContinuousClock.now
+
+        let result = try await call(.neverUpgrades, timeout: .seconds(1))
+
+        #expect(result.isError == true)
+        #expect(text(result).contains("didn't answer in time"))
+        #expect(ContinuousClock.now - start < .seconds(5))
+    }
+
+    @Test func cancellingACallStopsItPromptly() async throws {
+        let endpoint = try await FakeEndpoint(.silent)
+        let app = endpoint.app()
+        let tools = BridgeTools(timeout: .seconds(60)) { [app] }
+        let start = ContinuousClock.now
+
+        let call = Task { await tools.call("savestate_describe", arguments: [:]) }
+        try await Task.sleep(for: .milliseconds(300))
+        call.cancel()
+        _ = await call.value
+
+        #expect(ContinuousClock.now - start < .seconds(5))
+    }
+
+    @Test func anAppThatHangsUpSaysToRelaunch() async throws {
+        let result = try await call(.closesAfterHello)
+
+        #expect(result.isError == true)
+        #expect(text(result).contains("relaunch"), "\(text(result))")
+        #expect(!text(result).contains("NSPOSIXErrorDomain"))
+    }
+
+    @Test func anAppThatDiesMidRequestSaysToRelaunch() async throws {
+        let result = try await call(.closesAfterRequest)
+
+        #expect(result.isError == true)
+        #expect(text(result).contains("relaunch"), "\(text(result))")
+    }
+
+    @Test func anUnreadableReplySaysToRebuild() async throws {
+        let result = try await call(.garbageHello)
+
+        #expect(result.isError == true)
+        #expect(text(result).contains("Rebuild"), "\(text(result))")
+        #expect(!text(result).contains("DecodingError"))
+    }
+
+    @Test func aRejectedVersionSaysToRebuild() async throws {
+        let result = try await call(.rejects(WireError(code: .protocolMismatch, message: "Versions differ.")))
+
+        #expect(result.isError == true)
+        #expect(text(result).contains("Versions differ."))
+        #expect(text(result).contains("Rebuild"))
+    }
+
+    @Test func aRejectedTokenSaysTheAppMayHaveRelaunched() async throws {
+        let result = try await call(.rejects(WireError(code: .unauthorized, message: "The token is wrong.")))
+
+        #expect(result.isError == true)
+        #expect(text(result).contains("relaunched"))
+    }
+
+    @Test func aReplyToADifferentRequestIsNotAccepted() async throws {
+        let wrong = ResponseEnvelope(id: 99, result: .description(registry: RegistryDescription(controls: [], actions: [], scenarios: [])))
+
+        let result = try await call(.answers(wrong))
+
+        #expect(result.isError == true)
+        #expect(text(result).contains("different request"))
+    }
+
+    @Test func aFailureWithNoRequestIdentifierIsReported() async throws {
+        let failure = ResponseEnvelope(id: nil, result: .failure(error: WireError(code: .badRequest, message: "Bad message.")))
+
+        let result = try await call(.answers(failure))
+
+        #expect(result.isError == true)
+        #expect(text(result).contains("Bad message."))
+    }
+
+    @Test func theWrongKindOfResultIsReported() async throws {
+        let wrong = ResponseEnvelope(id: 1, result: .done)
+
+        let result = try await call(.answers(wrong))
+
+        #expect(result.isError == true)
+        #expect(text(result).contains("unexpected response"))
+    }
+}
