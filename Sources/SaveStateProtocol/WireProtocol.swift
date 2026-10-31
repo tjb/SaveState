@@ -6,5 +6,5 @@
 /// breaking change to the message format.
 public enum WireProtocol {
     /// The protocol version this build speaks.
-    public static let version = 1
+    public static let version = 2
 }

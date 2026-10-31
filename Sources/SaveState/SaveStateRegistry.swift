@@ -115,11 +115,12 @@ public final class SaveStateRegistry {
         return effectiveValue(of: try control(forKey: key))
     }
 
-    /// The keys of controls whose value differs from the value they had when
-    /// the registry was created, in declaration order.
+    /// The keys of controls with anything to reset, in declaration order: the
+    /// value differs from the one they had when the registry was created, or a
+    /// stored value that differs would return at a later launch.
     public var changedKeys: [String] {
         observeChanges()
-        return controls.filter { $0.binding.read() != $0.defaultValue }.map { $0.key }
+        return controls.filter { isChanged($0) }.map { $0.key }
     }
 
     // MARK: - Changing
@@ -245,8 +246,15 @@ public final class SaveStateRegistry {
             defaultValue: control.defaultValue,
             requiresRelaunch: control.requiresRelaunch,
             nextLaunchValue: store.value(forKey: control.key, in: .nextLaunch)
-                ?? store.value(forKey: control.key, in: .persisted)
+                ?? store.value(forKey: control.key, in: .persisted),
+            isChanged: isChanged(control)
         )
+    }
+
+    private func isChanged(_ control: Control) -> Bool {
+        let values = [control.binding.read()]
+            + OverrideStore.Slot.allCases.compactMap { store.value(forKey: control.key, in: $0) }
+        return values.contains { $0 != control.defaultValue }
     }
 
     private func storeValue(_ value: ControlValue, for control: Control, persist: Bool) {

@@ -21,6 +21,9 @@ public enum ControlKind: Hashable, Sendable {
     case decimal
     /// A date, or no override. Accepts `.date` or `.null`.
     case date
+    /// The app's clock, moved through `SaveStateClock`. Accepts `.date`, or
+    /// `.null` for real time.
+    case clock
 
     /// Returns `value` in the form this kind stores, or `nil` when this kind
     /// doesn't accept it.
@@ -31,11 +34,12 @@ public enum ControlKind: Hashable, Sendable {
              (.triState, .null),
              (.text, .string),
              (.integer, .int),
-             (.date, .null):
+             (.date, .null),
+             (.clock, .null):
             return value
         case (.decimal, .double(let number)):
             return number.isFinite ? value : nil
-        case (.date, .date(let date)):
+        case (.date, .date(let date)), (.clock, .date(let date)):
             return date.timeIntervalSince1970.isFinite ? value : nil
         case (.choice(let options), .string(let option)):
             return options.contains(option) ? value : nil
@@ -61,6 +65,7 @@ extension ControlKind: Codable {
         case integer
         case decimal
         case date
+        case clock
     }
 
     /// Decodes a kind from `{"type": ...}`, plus `options` for a choice.
@@ -81,6 +86,8 @@ extension ControlKind: Codable {
             self = .decimal
         case .date:
             self = .date
+        case .clock:
+            self = .clock
         }
     }
 
@@ -103,6 +110,8 @@ extension ControlKind: Codable {
             try container.encode(KindType.decimal, forKey: .type)
         case .date:
             try container.encode(KindType.date, forKey: .type)
+        case .clock:
+            try container.encode(KindType.clock, forKey: .type)
         }
     }
 }

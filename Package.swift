@@ -40,6 +40,10 @@ let package = Package(
             dependencies: ["SaveState"]
         ),
         .testTarget(
+            name: "SaveStateUITests",
+            dependencies: ["SaveStateUI"]
+        ),
+        .testTarget(
             name: "SaveStateProtocolTests",
             dependencies: ["SaveStateProtocol"]
         )

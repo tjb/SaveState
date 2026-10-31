@@ -9,9 +9,8 @@ and named **scenarios** that set many of them at once, such as `expired-trial` o
 `power-user`. SaveState renders that registry as a debug overlay for people and
 serves it over MCP for agents, in Debug builds only.
 
-> **Status:** pre-alpha. The registry and clock are in place; the overlay, the
-> agent endpoint, and the MCP tools are under development for v0.1. APIs will
-> change.
+> **Status:** pre-alpha. The registry, clock, and overlay are in place; the agent
+> endpoint and the MCP tools are under development for v0.1. APIs will change.
 
 ## Why
 
@@ -62,6 +61,21 @@ and tests use. Labels are display text and can change freely.
 The registry is enabled in Debug builds by default and throws
 `SaveStateError.disabled` on every change otherwise. Pass `isEnabled:` to turn
 it on for QA or TestFlight builds.
+
+### The overlay
+
+Attach the overlay at your app's root to get a floating ladybug button that
+opens a panel of every control, action, and scenario:
+
+```swift
+import SaveStateUI
+
+ContentView()
+    .saveStateOverlay(registry)
+```
+
+It shows nothing when the registry is disabled. Destructive actions ask first.
+[`Examples/SaveStateDemo`](Examples/SaveStateDemo) is a small app you can run.
 
 ### Time travel
 

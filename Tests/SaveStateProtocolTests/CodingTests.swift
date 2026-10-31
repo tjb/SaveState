@@ -19,6 +19,7 @@ private let sampleKinds: [ControlKind] = [
     .integer,
     .decimal,
     .date,
+    .clock,
 ]
 
 private func json(_ value: some Encodable) throws -> String {
@@ -120,7 +121,8 @@ struct CodingTests {
                     effectiveValue: .bool(true),
                     defaultValue: .null,
                     requiresRelaunch: false,
-                    nextLaunchValue: nil
+                    nextLaunchValue: nil,
+                    isChanged: false
                 ),
                 ControlDescription(
                     key: "env",
@@ -132,7 +134,8 @@ struct CodingTests {
                     effectiveValue: .string("production"),
                     defaultValue: .string("production"),
                     requiresRelaunch: true,
-                    nextLaunchValue: .string("staging")
+                    nextLaunchValue: .string("staging"),
+                    isChanged: false
                 ),
             ],
             actions: [
@@ -168,6 +171,8 @@ struct NormalizeTests {
         #expect(ControlKind.decimal.normalize(.double(1.5)) == .double(1.5))
         #expect(ControlKind.date.normalize(.date(date)) == .date(date))
         #expect(ControlKind.date.normalize(.null) == .null)
+        #expect(ControlKind.clock.normalize(.date(date)) == .date(date))
+        #expect(ControlKind.clock.normalize(.null) == .null)
     }
 
     @Test func convertsWholeNumbersForDecimals() {
@@ -184,5 +189,6 @@ struct NormalizeTests {
         #expect(ControlKind.decimal.normalize(.double(.nan)) == nil)
         #expect(ControlKind.decimal.normalize(.double(.infinity)) == nil)
         #expect(ControlKind.date.normalize(.string("2027-01-15")) == nil)
+        #expect(ControlKind.clock.normalize(.string("2027-01-15")) == nil)
     }
 }

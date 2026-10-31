@@ -409,4 +409,20 @@ struct RegistryTests {
         #expect(model.actionRuns == 0)
         #expect(store.value(forKey: "onboarding", in: .persisted) == .bool(true))
     }
+
+    @Test func aPersistedValueThatWouldReturnCountsAsChanged() throws {
+        let model = DebugModel()
+        let registry = makeRegistry(model: model, store: scratch.store)
+
+        try registry.set(.string("staging"), forKey: "env", persist: true)
+        try registry.set(.string("production"), forKey: "env")
+
+        #expect(registry.changedKeys == ["env"])
+        let control = try #require(registry.describe().controls.first { $0.key == "env" })
+        #expect(control.isChanged)
+
+        try registry.reset("env")
+
+        #expect(registry.changedKeys.isEmpty)
+    }
 }

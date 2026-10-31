@@ -55,7 +55,7 @@ struct ClockTests {
         #expect(registry.changedKeys == ["clock"])
         let control = try #require(registry.describe().controls.first)
         #expect(control.key == "clock")
-        #expect(control.kind == .date)
+        #expect(control.kind == .clock)
         #expect(control.value == .date(target))
         #expect(control.realValue == nil)
         #expect(control.defaultValue == .null)
@@ -99,7 +99,7 @@ struct ClockTests {
             r.clock()
         }
 
-        #expect(throws: SaveStateError.invalidValue(key: "clock", value: .bool(true), kind: .date)) {
+        #expect(throws: SaveStateError.invalidValue(key: "clock", value: .bool(true), kind: .clock)) {
             try registry.set(.bool(true), forKey: "clock")
         }
     }
