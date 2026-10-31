@@ -78,6 +78,21 @@ jobs:
             -destination 'generic/platform=iOS Simulator' 2>&1 | tee build-release.log; status=${PIPESTATUS[0]}
           bash "$GITHUB_WORKSPACE/.github/scripts/annotate-errors.sh" build-release.log
           exit "$status"
+      - name: Check that a Release app carries no server
+        run: |
+          derived="$RUNNER_TEMP/release"
+          xcodebuild build \
+            -project Examples/SaveStateDemo/SaveStateDemo.xcodeproj \
+            -scheme SaveStateDemo \
+            -configuration Release \
+            -destination 'generic/platform=iOS Simulator' \
+            -derivedDataPath "$derived" \
+            CODE_SIGNING_ALLOWED=NO 2>&1 | tee build-release-app.log; status=${PIPESTATUS[0]}
+          bash "$GITHUB_WORKSPACE/.github/scripts/annotate-errors.sh" build-release-app.log
+          [[ "$status" == 0 ]] || exit "$status"
+          bash .github/scripts/check-release-guard.sh
+          bash .github/scripts/check-release-binary.sh \
+            "$derived/Build/Products/Release-iphonesimulator/SaveStateDemo.app/SaveStateDemo"
 
   demo:
     name: Demo (iOS)

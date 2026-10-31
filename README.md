@@ -9,8 +9,8 @@ and named **scenarios** that set many of them at once, such as `expired-trial` o
 `power-user`. SaveState renders that registry as a debug overlay for people and
 serves it over MCP for agents, in Debug builds only.
 
-> **Status:** pre-alpha. The registry, clock, and overlay are in place; the agent
-> endpoint and the MCP tools are under development for v0.1. APIs will change.
+> **Status:** pre-alpha. The registry, clock, overlay, and simulator endpoint are
+> in place; the MCP tools are under development for v0.1. APIs will change.
 
 ## Why
 
@@ -76,6 +76,24 @@ ContentView()
 
 It shows nothing when the registry is disabled. Destructive actions ask first.
 [`Examples/SaveStateDemo`](Examples/SaveStateDemo) is a small app you can run.
+
+### The agent endpoint
+
+Start the endpoint at launch so the `savestate` bridge can reach the registry. It
+exists only in Debug builds, so guard both the import and the call:
+
+```swift
+#if DEBUG
+import SaveStateAgent
+#endif
+
+#if DEBUG
+Task { try? await AgentEndpoint.start(registry: registry) }
+#endif
+```
+
+It runs in the simulator, on the loopback interface, and each connection must
+present a token that's new at each launch. Nothing listens on a physical device.
 
 ### Coming from PremiumToggle
 
