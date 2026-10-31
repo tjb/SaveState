@@ -1,0 +1,162 @@
+import XCTest
+
+/// Drives the overlay through real taps, including the parts unit tests can't
+/// reach: presenting the popover, the confirmation alert, and relaunching.
+///
+/// These use XCTest because XCUITest requires it.
+@MainActor
+final class OverlayUITests: XCTestCase {
+    private var app: XCUIApplication!
+
+    override func setUp() async throws {
+        continueAfterFailure = false
+        app = XCUIApplication()
+        app.launch()
+        openPanel()
+        let resetAll = app.buttons["saveState.resetAll"]
+        if resetAll.isEnabled {
+            resetAll.tap()
+        }
+    }
+
+    private func openPanel() {
+        let button = app.buttons["saveState.button"]
+        XCTAssertTrue(button.waitForExistence(timeout: 10))
+        button.tap()
+        XCTAssertTrue(app.buttons["saveState.resetAll"].waitForExistence(timeout: 5))
+    }
+
+    /// Dismisses the popover by tapping the page behind it. With the keyboard
+    /// up, the first tap may only end editing.
+    private func closePanel() {
+        let resetAll = app.buttons["saveState.resetAll"]
+        for _ in 0..<3 where resetAll.exists {
+            app.coordinate(withNormalizedOffset: CGVector(dx: 0.04, dy: 0.3)).tap()
+            _ = resetAll.waitForNonExistence(timeout: 2)
+        }
+        XCTAssertFalse(resetAll.exists)
+    }
+
+    private func relaunch() {
+        app.terminate()
+        app.launch()
+        openPanel()
+    }
+
+    private func element(_ identifier: String) -> XCUIElement {
+        app.descendants(matching: .any)[identifier].firstMatch
+    }
+
+    /// Drags the panel's content until the element sits in its visible band.
+    private func scroll(to identifier: String) {
+        let target = element(identifier)
+        let top = app.buttons["saveState.resetAll"].frame.maxY + 40
+        let bottom = app.buttons["saveState.button"].frame.minY - 16
+        func isVisible() -> Bool {
+            target.exists && target.frame.minY > top && target.frame.maxY < bottom
+        }
+        let start = app.coordinate(withNormalizedOffset: CGVector(dx: 0.22, dy: 0.0))
+            .withOffset(CGVector(dx: 0, dy: bottom - 20))
+        let end = app.coordinate(withNormalizedOffset: CGVector(dx: 0.22, dy: 0.0))
+            .withOffset(CGVector(dx: 0, dy: top + 80))
+        for _ in 0..<8 where !isVisible() {
+            start.press(forDuration: 0.05, thenDragTo: end)
+        }
+        XCTAssertTrue(isVisible(), "\(identifier) isn't reachable")
+    }
+
+    func testOverlayChangesPersistAcrossRelaunchUntilReset() {
+        let tips = app.switches["saveState.control.tips"]
+        scroll(to: "saveState.control.tips")
+        XCTAssertFalse(element("saveState.changed.tips").exists)
+
+        tips.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5)).tap()
+        XCTAssertTrue(element("saveState.changed.tips").waitForExistence(timeout: 2))
+
+        relaunch()
+
+        scroll(to: "saveState.control.tips")
+        XCTAssertTrue(element("saveState.changed.tips").exists)
+        app.buttons["saveState.reset.tips"].tap()
+        XCTAssertTrue(element("saveState.changed.tips").waitForNonExistence(timeout: 2))
+    }
+
+    func testRelaunchControlIsMarked() {
+        scroll(to: "saveState.control.env")
+        XCTAssertTrue(element("saveState.relaunch.env").exists)
+        XCTAssertFalse(element("saveState.relaunch.tips").exists)
+    }
+
+    func testTextAppliesWhenThePanelClosesMidEdit() {
+        scroll(to: "saveState.control.greeting")
+        let field = app.textFields["saveState.control.greeting"]
+        field.tap()
+        field.typeText("!")
+        closePanel()
+        XCTAssertTrue(app.staticTexts["Greeting, Welcome back!"].waitForExistence(timeout: 5))
+
+        openPanel()
+        scroll(to: "saveState.control.greeting")
+        XCTAssertTrue(element("saveState.changed.greeting").exists)
+    }
+
+    func testInvalidNumberIsRejected() {
+        scroll(to: "saveState.control.project-limit")
+        let field = app.textFields["saveState.control.project-limit"]
+        field.tap()
+        field.typeText("x\n")
+        XCTAssertTrue(app.staticTexts["Enter a whole number."].waitForExistence(timeout: 2))
+        XCTAssertFalse(element("saveState.changed.project-limit").exists)
+    }
+
+    func testDestructiveActionAsksFirst() {
+        scroll(to: "saveState.action.seed")
+        app.buttons["saveState.action.seed"].tap()
+        XCTAssertTrue(element("saveState.message").waitForExistence(timeout: 2))
+
+        scroll(to: "saveState.action.erase")
+        app.buttons["saveState.action.erase"].tap()
+        let alert = app.alerts.firstMatch
+        XCTAssertTrue(alert.waitForExistence(timeout: 2))
+        alert.buttons["Cancel"].firstMatch.tap()
+        XCTAssertTrue(alert.waitForNonExistence(timeout: 2))
+        closePanel()
+        XCTAssertTrue(app.staticTexts["Seeded projects, 5"].waitForExistence(timeout: 2))
+
+        openPanel()
+        scroll(to: "saveState.action.erase")
+        app.buttons["saveState.action.erase"].tap()
+        XCTAssertTrue(alert.waitForExistence(timeout: 2))
+        alert.buttons["Run"].firstMatch.tap()
+        XCTAssertTrue(alert.waitForNonExistence(timeout: 2))
+        closePanel()
+        XCTAssertTrue(app.staticTexts["Seeded projects, 0"].waitForExistence(timeout: 2))
+    }
+
+    func testExpiredTrialScenarioShowsThePaywall() {
+        scroll(to: "saveState.scenario.expired-trial")
+        app.buttons["saveState.scenario.expired-trial"].tap()
+        XCTAssertTrue(element("saveState.message").waitForExistence(timeout: 2))
+        closePanel()
+        XCTAssertTrue(element("demo.paywall").waitForExistence(timeout: 3))
+
+        openPanel()
+        app.buttons["saveState.resetAll"].tap()
+        closePanel()
+        XCTAssertTrue(element("demo.trial").waitForExistence(timeout: 3))
+    }
+
+    /// Holds the panel open so `simctl io` can capture it. Runs only when
+    /// xcodebuild is given `TEST_RUNNER_SAVESTATE_HOLD_SECONDS`.
+    func testHoldPanelOpenForScreenshot() throws {
+        let environment = ProcessInfo.processInfo.environment
+        guard let seconds = environment["SAVESTATE_HOLD_SECONDS"].flatMap(TimeInterval.init) else {
+            throw XCTSkip("SAVESTATE_HOLD_SECONDS isn't set")
+        }
+        if environment["SAVESTATE_HOLD_SCROLL"] != nil {
+            scroll(to: "saveState.scenario.expired-trial")
+        }
+        print("SAVESTATE_PANEL_OPEN")
+        Thread.sleep(forTimeInterval: seconds)
+    }
+}

@@ -172,7 +172,7 @@ public final class RegistryBuilder<Model: AnyObject> {
         addControl(
             key: key,
             label: label,
-            kind: .date,
+            kind: .clock,
             requiresRelaunch: false,
             binding: ClockBinding(),
             defaultValue: .null,
