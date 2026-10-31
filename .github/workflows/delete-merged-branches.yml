@@ -1,0 +1,39 @@
+name: Delete merged branches
+
+# Runs after every merge (a merge pushes to main) and on demand. Deletes the
+# branch of each merged pull request, but only while the branch still points at
+# exactly the commit that was merged, so a reused branch name with new work
+# is never touched.
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+  pull-requests: read
+
+jobs:
+  delete:
+    name: Delete merged branches
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Delete branches of merged pull requests
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
+        run: |
+          gh api "repos/$REPO/branches" --paginate --jq '.[] | "\(.name) \(.commit.sha)"' > branches.txt
+          gh pr list --repo "$REPO" --state merged --limit 200 \
+            --json headRefName,headRefOid,isCrossRepository \
+            --jq '.[] | select(.isCrossRepository | not) | "\(.headRefName) \(.headRefOid)"' |
+          while read -r branch sha; do
+            [ "$branch" = "$DEFAULT_BRANCH" ] && continue
+            if grep -qxF "$branch $sha" branches.txt; then
+              echo "Deleting $branch at ${sha:0:7}"
+              gh api -X DELETE "repos/$REPO/git/refs/heads/$branch"
+            fi
+          done
