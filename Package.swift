@@ -22,7 +22,11 @@ let package = Package(
     ],
     targets: [
         .target(name: "SaveStateProtocol"),
-        .target(name: "SaveState"),
+        .target(
+            name: "SaveState",
+            dependencies: ["SaveStateProtocol"],
+            resources: [.copy("Resources/PrivacyInfo.xcprivacy")]
+        ),
         .target(
             name: "SaveStateUI",
             dependencies: ["SaveState"]

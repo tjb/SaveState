@@ -50,6 +50,7 @@ xcodebuild build -scheme SaveState-Package \
 - Do not add `Co-Authored-By` or `Claude-Session` trailers to commits, and do not
   add a "Generated with Claude Code" footer to pull request descriptions.
 - Work on a branch and open a pull request. Do not push to `main`.
+- Squash-merge a pull request once CI is green. GitHub deletes the merged branch.
 
 ## Decisions
 
