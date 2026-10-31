@@ -97,7 +97,7 @@ jobs:
   demo:
     name: Demo (iOS)
     runs-on: macos-26
-    timeout-minutes: 40
+    timeout-minutes: 45
     steps:
       - uses: actions/checkout@v5
       - run: xcodebuild -version
@@ -112,9 +112,19 @@ jobs:
           xcodebuild test \
             -project Examples/SaveStateDemo/SaveStateDemo.xcodeproj \
             -scheme SaveStateDemo \
-            -destination "id=$udid" 2>&1 | tee demo.log; status=${PIPESTATUS[0]}
+            -destination "id=$udid" \
+            -derivedDataPath "$RUNNER_TEMP/demo" 2>&1 | tee demo.log; status=${PIPESTATUS[0]}
           bash "$GITHUB_WORKSPACE/.github/scripts/annotate-errors.sh" demo.log
-          exit "$status"
+          [[ "$status" == 0 ]] || exit "$status"
+          echo "udid=$udid" >> "$GITHUB_ENV"
+      - name: Drive the demo through the MCP server
+        run: |
+          (cd CLI && swift build)
+          xcrun simctl bootstatus "$udid" -b
+          xcrun simctl install "$udid" "$RUNNER_TEMP/demo/Build/Products/Debug-iphonesimulator/SaveStateDemo.app"
+          xcrun simctl launch "$udid" dev.tjb.SaveStateDemo
+          sleep 5
+          python3 .github/scripts/check-mcp-simulator.py CLI/.build/debug/savestate "$udid"
 
   cli:
     name: CLI (macOS)

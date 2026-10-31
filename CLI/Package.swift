@@ -38,7 +38,12 @@ let package = Package(
         ),
         .testTarget(
             name: "SaveStateBridgeKitTests",
-            dependencies: ["SaveStateBridgeKit"]
+            dependencies: [
+                "SaveStateBridgeKit",
+                .product(name: "MCP", package: "swift-sdk"),
+                .product(name: "SaveState", package: "SaveState"),
+                .product(name: "SaveStateAgent", package: "SaveState")
+            ]
         )
     ]
 )
