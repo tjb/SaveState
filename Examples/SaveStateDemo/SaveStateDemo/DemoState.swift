@@ -12,7 +12,7 @@ enum ServerEnvironment: String, CaseIterable {
 @Observable
 final class DemoState {
     /// When the trial really ends: a week after this launch.
-    let realTrialEnd = Date().addingTimeInterval(7 * 86_400)
+    let realTrialEnd = Date().addingTimeInterval(7 * 86_400) // swiftlint:disable:this demo_reads_savestate_clock
     /// Stands in for a real StoreKit entitlement.
     let isEntitled = false
 

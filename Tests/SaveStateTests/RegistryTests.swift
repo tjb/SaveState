@@ -16,7 +16,7 @@ struct RegistryTests {
         let description = makeRegistry(model: model, store: scratch.store).describe()
 
         #expect(description.controls.map(\.key) == [
-            "onboarding", "premium", "trial-end", "env", "greeting", "launches", "discount",
+            "onboarding", "premium", "trial-end", "env", "greeting", "launches", "discount"
         ])
         #expect(description.actions.map(\.key) == ["count", "erase"])
         #expect(description.actions.map(\.isDestructive) == [false, true])
@@ -424,5 +424,16 @@ struct RegistryTests {
         try registry.reset("env")
 
         #expect(registry.changedKeys.isEmpty)
+    }
+
+    @Test func aDiscardingStoreRestoresNothing() throws {
+        let registry = makeRegistry(model: DebugModel(), store: .discarding)
+        try registry.set(.bool(true), forKey: "onboarding", persist: true)
+        #expect(registry.describe().controls.first { $0.key == "onboarding" }?.nextLaunchValue == nil)
+
+        let model = DebugModel()
+        _ = makeRegistry(model: model, store: .discarding)
+
+        #expect(!model.showsOnboarding)
     }
 }

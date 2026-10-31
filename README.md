@@ -77,6 +77,13 @@ ContentView()
 It shows nothing when the registry is disabled. Destructive actions ask first.
 [`Examples/SaveStateDemo`](Examples/SaveStateDemo) is a small app you can run.
 
+### Coming from PremiumToggle
+
+`SaveStateUI` includes PremiumToggle's API, so an existing
+`.premiumToggle(manager)` keeps working after you change the import. Your
+provider still owns the override and stores it under the same key, so existing
+overrides carry over. Accessibility identifiers inside the panel are SaveState's.
+
 ### Time travel
 
 Read `SaveStateClock.now` instead of `Date()` wherever "now" decides behavior,

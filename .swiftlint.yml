@@ -1,0 +1,45 @@
+# CI pins the SwiftLint version in .github/workflows/ci.yml. SwiftLint isn't a
+# package plugin because the root package must stay free of dependencies.
+included:
+  - Package.swift
+  - Sources
+  - Tests
+  - CLI/Package.swift
+  - CLI/Sources
+  - CLI/Tests
+  - Examples
+
+# Size limits only produce noise in a package with long doc comments.
+disabled_rules:
+  - file_length
+  - function_body_length
+  - line_length
+  - type_body_length
+
+# `r` is the documented name for the registry builder in declaration closures.
+identifier_name:
+  excluded:
+    - id
+    - r
+
+custom_rules:
+  no_networking_outside_agent:
+    name: "No networking outside SaveStateAgent"
+    message: "SaveState and SaveStateUI link into Release builds. Networking belongs in SaveStateAgent, inside #if DEBUG."
+    included: "Sources/(SaveState|SaveStateUI)/"
+    regex: '\b(URLSession|URLRequest|NWConnection|NWListener|NWBrowser|CFSocket|CFStream)\b|\bimport\s+(class\s+|struct\s+|enum\s+)?Network\b'
+    excluded_match_kinds:
+      - comment
+      - doccomment
+      - string
+    severity: error
+  demo_reads_savestate_clock:
+    name: "Read time through SaveStateClock"
+    message: "Read SaveStateClock.now so the clock control can move this. The demo is the adoption path people copy."
+    included: "Examples/"
+    regex: '\bDate\(\)'
+    excluded_match_kinds:
+      - comment
+      - doccomment
+      - string
+    severity: error

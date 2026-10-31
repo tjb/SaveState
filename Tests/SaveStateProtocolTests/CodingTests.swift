@@ -8,7 +8,7 @@ private let sampleValues: [ControlValue] = [
     .string("staging"),
     .int(42),
     .double(0.5),
-    .date(Date(timeIntervalSince1970: 1_800_000_000.25)),
+    .date(Date(timeIntervalSince1970: 1_800_000_000.25))
 ]
 
 private let sampleKinds: [ControlKind] = [
@@ -19,13 +19,13 @@ private let sampleKinds: [ControlKind] = [
     .integer,
     .decimal,
     .date,
-    .clock,
+    .clock
 ]
 
 private func json(_ value: some Encodable) throws -> String {
     let encoder = JSONEncoder()
     encoder.outputFormatting = .sortedKeys
-    return String(decoding: try encoder.encode(value), as: UTF8.self)
+    return String(bytes: try encoder.encode(value), encoding: .utf8) ?? ""
 }
 
 private func roundTrip<Value: Codable>(_ value: Value) throws -> Value {
@@ -136,10 +136,10 @@ struct CodingTests {
                     requiresRelaunch: true,
                     nextLaunchValue: .string("staging"),
                     isChanged: false
-                ),
+                )
             ],
             actions: [
-                ActionDescription(key: "erase", label: "Erase", section: nil, isDestructive: true),
+                ActionDescription(key: "erase", label: "Erase", section: nil, isDestructive: true)
             ],
             scenarios: [
                 ScenarioDescription(
@@ -148,7 +148,7 @@ struct CodingTests {
                     section: "Purchases",
                     summary: "The trial ended, so the paywall shows."
                 ),
-                ScenarioDescription(key: "fresh-install", label: "Fresh install", section: nil, summary: nil),
+                ScenarioDescription(key: "fresh-install", label: "Fresh install", section: nil, summary: nil)
             ]
         )
 

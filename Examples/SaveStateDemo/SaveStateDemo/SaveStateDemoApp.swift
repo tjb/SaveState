@@ -6,6 +6,7 @@ import SwiftUI
 struct SaveStateDemoApp: App {
     @State private var state: DemoState
     @State private var registry: SaveStateRegistry
+    @State private var premiumManager = DemoPremiumManager()
 
     init() {
         let state = DemoState()
@@ -15,8 +16,14 @@ struct SaveStateDemoApp: App {
 
     var body: some Scene {
         WindowGroup {
-            DemoContentView(state: state)
-                .saveStateOverlay(registry)
+            // UI tests pass this to exercise the PremiumToggle shim on its own.
+            if ProcessInfo.processInfo.arguments.contains("-premiumToggleShim") {
+                DemoContentView(state: state)
+                    .premiumToggle(premiumManager)
+            } else {
+                DemoContentView(state: state)
+                    .saveStateOverlay(registry)
+            }
         }
     }
 }

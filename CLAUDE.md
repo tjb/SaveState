@@ -26,6 +26,7 @@ swift build && swift test                       # root package on macOS
 xcodebuild build -scheme SaveState-Package \
   -destination 'generic/platform=iOS Simulator' # root package on iOS
 (cd CLI && swift build && swift test)           # CLI and bridge
+swiftlint lint --strict                         # lint; CI pins the version
 ```
 
 ## Rules
@@ -42,6 +43,8 @@ xcodebuild build -scheme SaveState-Package \
   their build paths collide at link time.
 - Control, action, probe, and scenario keys are stable identifiers. Labels are
   display text and are never matched on.
+- SwiftLint runs as a binary, never as a package plugin, so the root package
+  stays free of dependencies.
 - Tests use Swift Testing. Public API gets doc comments.
 
 ## Git
