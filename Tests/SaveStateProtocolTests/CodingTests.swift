@@ -2,7 +2,7 @@ import Foundation
 import SaveStateProtocol
 import Testing
 
-private let sampleValues: [ControlValue] = [
+let sampleValues: [ControlValue] = [
     .null,
     .bool(true),
     .string("staging"),
@@ -11,7 +11,7 @@ private let sampleValues: [ControlValue] = [
     .date(Date(timeIntervalSince1970: 1_800_000_000.25))
 ]
 
-private let sampleKinds: [ControlKind] = [
+let sampleKinds: [ControlKind] = [
     .toggle,
     .triState,
     .choice(options: ["staging", "production"]),
@@ -22,13 +22,13 @@ private let sampleKinds: [ControlKind] = [
     .clock
 ]
 
-private func json(_ value: some Encodable) throws -> String {
+func json(_ value: some Encodable) throws -> String {
     let encoder = JSONEncoder()
     encoder.outputFormatting = .sortedKeys
     return String(bytes: try encoder.encode(value), encoding: .utf8) ?? ""
 }
 
-private func roundTrip<Value: Codable>(_ value: Value) throws -> Value {
+func roundTrip<Value: Codable>(_ value: Value) throws -> Value {
     try JSONDecoder().decode(Value.self, from: JSONEncoder().encode(value))
 }
 
