@@ -9,6 +9,7 @@
 /* Begin PBXBuildFile section */
 		C0FFEE00000000000000000E /* SaveState in Frameworks */ = {isa = PBXBuildFile; productRef = C0FFEE00000000000000000C /* SaveState */; };
 		C0FFEE00000000000000001E /* SaveStateUI in Frameworks */ = {isa = PBXBuildFile; productRef = C0FFEE00000000000000001C /* SaveStateUI */; };
+		C0FFEE00000000000000001F /* SaveStateAgent in Frameworks */ = {isa = PBXBuildFile; productRef = C0FFEE00000000000000001D /* SaveStateAgent */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXContainerItemProxy section */
@@ -46,6 +47,7 @@
 			files = (
 				C0FFEE00000000000000000E /* SaveState in Frameworks */,
 				C0FFEE00000000000000001E /* SaveStateUI in Frameworks */,
+				C0FFEE00000000000000001F /* SaveStateAgent in Frameworks */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -99,6 +101,7 @@
 			packageProductDependencies = (
 				C0FFEE00000000000000000C /* SaveState */,
 				C0FFEE00000000000000001C /* SaveStateUI */,
+				C0FFEE00000000000000001D /* SaveStateAgent */,
 			);
 			productName = SaveStateDemo;
 			productReference = C0FFEE000000000000000004 /* SaveStateDemo.app */;
@@ -366,6 +369,10 @@
 		C0FFEE00000000000000001C /* SaveStateUI */ = {
 			isa = XCSwiftPackageProductDependency;
 			productName = SaveStateUI;
+		};
+		C0FFEE00000000000000001D /* SaveStateAgent */ = {
+			isa = XCSwiftPackageProductDependency;
+			productName = SaveStateAgent;
 		};
 /* End XCSwiftPackageProductDependency section */
 	};

@@ -1,6 +1,9 @@
 import SaveState
 import SaveStateUI
 import SwiftUI
+#if DEBUG
+import SaveStateAgent
+#endif
 
 @main
 struct SaveStateDemoApp: App {
@@ -15,7 +18,11 @@ struct SaveStateDemoApp: App {
     init() {
         let state = DemoState()
         _state = State(initialValue: state)
-        _registry = State(initialValue: DemoState.makeRegistry(for: state))
+        let registry = DemoState.makeRegistry(for: state)
+        _registry = State(initialValue: registry)
+        #if DEBUG
+        Task { try? await AgentEndpoint.start(registry: registry) }
+        #endif
     }
 
     var body: some Scene {
