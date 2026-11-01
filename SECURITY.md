@@ -18,13 +18,13 @@ that matter most:
 
 - **Release builds contain no server.** Every line of `SaveStateAgent` is inside
   `#if DEBUG`, and `SaveState` and `SaveStateUI` contain no networking code.
-- **The endpoint is reachable only from the same Mac.** It runs only in the
-  simulator and binds to the loopback interface. It doesn't start on a physical
-  device.
+- **The endpoint is reachable only from the same Mac.** It binds to the loopback
+  interface and runs in the simulator, or in a Mac app that passes a container
+  directory when it starts the endpoint. It doesn't start on a physical device.
 - **Each connection needs a token.** The token is new at each launch, and it's
   stored in an endpoint file in the app's data container that only the file's
   owner can read.
-- **Agents can't run destructive actions.** The bridge refuses them, so a person
+- **Agents can't run destructive actions.** The endpoint refuses them, so a person
   has to run them.
 
 A way around any of these is a vulnerability, including a Release build that
