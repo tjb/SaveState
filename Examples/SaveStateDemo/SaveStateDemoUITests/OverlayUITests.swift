@@ -157,6 +157,25 @@ final class OverlayUITests: XCTestCase {
         XCTAssertEqual(greeting.label, "Greeting, Welcome back")
     }
 
+    func testResetAllDiscardsADraftWhenNothingElseChanged() {
+        scroll(to: "saveState.control.greeting")
+        let field = app.textFields["saveState.control.greeting"]
+        let resetAll = app.buttons["saveState.resetAll"]
+        XCTAssertFalse(resetAll.isEnabled)
+        field.tap()
+        field.typeText("!")
+        let enabled = XCTNSPredicateExpectation(predicate: NSPredicate(format: "isEnabled == true"), object: resetAll)
+        XCTAssertEqual(XCTWaiter.wait(for: [enabled], timeout: 15), .completed, "Typing didn't enable Reset All")
+
+        resetAll.tap()
+        let disabled = XCTNSPredicateExpectation(predicate: NSPredicate(format: "isEnabled == false"), object: resetAll)
+        XCTAssertEqual(XCTWaiter.wait(for: [disabled], timeout: 15), .completed, "Reset All stayed enabled")
+        closePanel()
+        let greeting = app.staticTexts.matching(NSPredicate(format: "label BEGINSWITH 'Greeting,'")).firstMatch
+        XCTAssertTrue(greeting.waitForExistence(timeout: 15), "The greeting row never appeared")
+        XCTAssertEqual(greeting.label, "Greeting, Welcome back")
+    }
+
     func testResetAllIsDisabledWithNothingToReset() {
         XCTAssertFalse(app.buttons["saveState.resetAll"].isEnabled)
     }

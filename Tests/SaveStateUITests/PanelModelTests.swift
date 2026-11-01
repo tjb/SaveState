@@ -129,6 +129,12 @@ struct PanelStatusTests {
         #expect(PanelStatus(changedCount: 1).canResetAll)
     }
 
+    @Test func resetAllCanDiscardADraftWhenNothingElseChanged() {
+        let status = PanelStatus(changedCount: 0, hasEditedDrafts: true)
+        #expect(status.canResetAll)
+        #expect(status.isAtDefault)
+    }
+
     @Test func theButtonsValueStatesACountOfZero() {
         #expect(PanelStatus(changedCount: 0).accessibilityValue == "0 controls changed")
     }
@@ -241,6 +247,30 @@ struct PanelChangeTests {
         fixture.model.resetAll()
 
         #expect(fixture.session.resetAllCount == 1)
+    }
+
+    @Test func aDraftEnablesResetAllUntilItsEditorReportsItGone() throws {
+        let fixture = Fixture()
+        let control = try #require(fixture.registry.describe().controls.first)
+
+        fixture.model.noteDraft(isEdited: true, of: control)
+        #expect(fixture.session.editedDraftKeys == [control.key])
+
+        fixture.model.noteDraft(isEdited: false, of: control)
+        #expect(fixture.session.editedDraftKeys.isEmpty)
+    }
+
+    @Test func oneEditorsReportLeavesAnothersDraftInPlace() throws {
+        let fixture = Fixture()
+        let controls = fixture.registry.describe().controls
+        let first = try #require(controls.first)
+        let second = try #require(controls.dropFirst().first)
+
+        fixture.model.noteDraft(isEdited: true, of: first)
+        fixture.model.noteDraft(isEdited: true, of: second)
+        fixture.model.noteDraft(isEdited: false, of: first)
+
+        #expect(fixture.session.editedDraftKeys == [second.key])
     }
 
     @Test func resetAllClearsAnEarlierMessage() {
