@@ -48,6 +48,29 @@ private final class Client: Sendable {
         task.cancel(with: .goingAway, reason: nil)
     }
 
+    func sendBinary(_ data: Data) async throws {
+        try await task.send(.data(data))
+    }
+
+    /// Waits for the server's pong, and throws if the connection ends first.
+    func ping() async throws {
+        let task = task
+        try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, any Error>) in
+            task.sendPing { error in
+                if let error {
+                    continuation.resume(throwing: error)
+                } else {
+                    continuation.resume()
+                }
+            }
+        }
+    }
+
+    /// Disconnects abruptly, as a bridge that was killed would.
+    func disconnect() {
+        task.cancel(with: .goingAway, reason: nil)
+    }
+
     func sendRaw(_ text: String) async throws {
         try await task.send(.string(text))
     }
@@ -82,8 +105,9 @@ private final class Client: Sendable {
                 }
             }
             group.addTask {
+                // Cancelling here would make the receive above throw and report a
+                // close that this timeout caused. The cancel below cleans up instead.
                 try? await Task.sleep(for: limit)
-                task.cancel(with: .goingAway, reason: nil)
                 return false
             }
             let result = await group.next() ?? false
@@ -91,6 +115,36 @@ private final class Client: Sendable {
             task.cancel(with: .goingAway, reason: nil)
             return result
         }
+    }
+}
+
+/// Lets a test hold an action open and see when it arrives.
+private actor Gate {
+    private var hasArrived = false
+    private var isReleased = false
+    private var arrivalWaiters: [CheckedContinuation<Void, Never>] = []
+    private var releaseWaiters: [CheckedContinuation<Void, Never>] = []
+
+    /// Called by the action: reports arrival, then waits for the release.
+    func arrive() async {
+        hasArrived = true
+        arrivalWaiters.forEach { $0.resume() }
+        arrivalWaiters.removeAll()
+        if !isReleased {
+            await withCheckedContinuation { releaseWaiters.append($0) }
+        }
+    }
+
+    func waitForArrival() async {
+        if !hasArrived {
+            await withCheckedContinuation { arrivalWaiters.append($0) }
+        }
+    }
+
+    func release() {
+        isReleased = true
+        releaseWaiters.forEach { $0.resume() }
+        releaseWaiters.removeAll()
     }
 }
 
@@ -107,6 +161,86 @@ private func canConnect(host: String, port: UInt16) -> Bool {
     return withUnsafePointer(to: &address) { pointer in
         pointer.withMemoryRebound(to: sockaddr.self, capacity: 1) {
             connect(descriptor, $0, socklen_t(MemoryLayout<sockaddr_in>.size)) == 0
+        }
+    }
+}
+
+#if os(macOS)
+/// The TCP addresses this process listens on, such as `127.0.0.1:8080`, as the
+/// system reports them. This sees the bound socket itself, so it doesn't depend on
+/// which network interfaces the machine has. Bounded, so a stuck `lsof` fails the
+/// test rather than hanging it.
+private func listeningAddresses() throws -> Set<String> {
+    let process = Process()
+    process.executableURL = URL(fileURLWithPath: "/usr/sbin/lsof")
+    process.arguments = ["-nP", "-a", "-p", "\(ProcessInfo.processInfo.processIdentifier)", "-iTCP", "-sTCP:LISTEN", "-Fn"]
+    let output = Pipe()
+    process.standardOutput = output
+    process.standardError = FileHandle.nullDevice
+    try process.run()
+    let timer = DispatchWorkItem { process.terminate() }
+    DispatchQueue.global().asyncAfter(deadline: .now() + 10, execute: timer)
+    let data = output.fileHandleForReading.readDataToEndOfFile()
+    process.waitUntilExit()
+    timer.cancel()
+    return Set(
+        (String(bytes: data, encoding: .utf8) ?? "")
+            .split(separator: "\n")
+            .filter { $0.hasPrefix("n") }
+            .map { String($0.dropFirst()) }
+    )
+}
+#endif
+
+/// This Mac's first non-loopback IPv4 address, if it has one.
+private func nonLoopbackAddress() -> String? {
+    var first: UnsafeMutablePointer<ifaddrs>?
+    guard getifaddrs(&first) == 0 else { return nil }
+    defer { freeifaddrs(first) }
+    var next = first
+    while let current = next {
+        defer { next = current.pointee.ifa_next }
+        guard let address = current.pointee.ifa_addr,
+              address.pointee.sa_family == sa_family_t(AF_INET),
+              current.pointee.ifa_flags & UInt32(IFF_LOOPBACK) == 0,
+              current.pointee.ifa_flags & UInt32(IFF_UP) != 0
+        else { continue }
+        var host = [CChar](repeating: 0, count: Int(NI_MAXHOST))
+        guard getnameinfo(address, socklen_t(address.pointee.sa_len), &host, socklen_t(host.count), nil, 0, NI_NUMERICHOST) == 0 else {
+            continue
+        }
+        return String(bytes: host.prefix { $0 != 0 }.map { UInt8(bitPattern: $0) }, encoding: .utf8)
+    }
+    return nil
+}
+
+/// Ways a presented token can differ from the real one.
+private enum WrongToken: String, CaseIterable, CustomTestStringConvertible {
+    case empty
+    case missingLastCharacter
+    case oneCharacterTooLong
+    case wrongFirstCharacter
+    case wrongMiddleCharacter
+    case wrongLastCharacter
+
+    var testDescription: String { rawValue }
+
+    func applied(to token: String) -> String {
+        func changed(_ character: Character) -> String { character == "0" ? "1" : "0" }
+        let middle = token.index(token.startIndex, offsetBy: token.count / 2)
+        switch self {
+        case .empty:
+            return ""
+        case .missingLastCharacter:
+            return String(token.dropLast())
+        case .oneCharacterTooLong:
+            return token + "0"
+        case .wrongFirstCharacter:
+            return changed(token[token.startIndex]) + token.dropFirst()
+        case .wrongMiddleCharacter:
+            return token[..<middle] + changed(token[middle]) + token[token.index(after: middle)...]
+        case .wrongLastCharacter:
+            return token.dropLast() + changed(token[token.index(before: token.endIndex)])
         }
     }
 }
@@ -171,6 +305,15 @@ struct AgentEndpointTests {
 
         let attributes = try FileManager.default.attributesOfItem(atPath: url.path)
         #expect((attributes[.posixPermissions] as? NSNumber)?.intValue == 0o600)
+    }
+
+    @Test func theEndpointFilesDirectoryIsPrivate() async throws {
+        let endpoint = try await start()
+        defer { endpoint.stop() }
+
+        let folder = scratch.container.appendingPathComponent(EndpointInfo.relativePath).deletingLastPathComponent()
+        let attributes = try FileManager.default.attributesOfItem(atPath: folder.path)
+        #expect((attributes[.posixPermissions] as? NSNumber)?.intValue == 0o700)
     }
 
     @Test func stopRemovesTheFileAndRefusesConnections() async throws {
@@ -242,6 +385,89 @@ struct AgentEndpointTests {
         let endpoint = try await start()
         defer { endpoint.stop() }
         #expect(canConnect(host: "127.0.0.1", port: endpoint.info.port))
+    }
+
+    #if os(macOS)
+    @Test func aFailedWriteLeavesNothingListening() async throws {
+        let notADirectory = scratch.container.appendingPathComponent("file")
+        try FileManager.default.createDirectory(at: scratch.container, withIntermediateDirectories: true)
+        try Data().write(to: notADirectory)
+        let before = try listeningAddresses()
+
+        await #expect(throws: (any Error).self) {
+            try await AgentEndpoint.start(registry: makeRegistry(), container: notADirectory)
+        }
+
+        // The cancelled listener closes its socket on its own schedule.
+        let deadline = ContinuousClock.now + .seconds(2)
+        var added = try listeningAddresses().subtracting(before)
+        while !added.isEmpty, ContinuousClock.now < deadline {
+            try await Task.sleep(for: .milliseconds(50))
+            added = try listeningAddresses().subtracting(before)
+        }
+        #expect(added.isEmpty)
+    }
+    #endif
+
+    @Test func aContainerItCantCreateTheFileInThrowsTheWriteError() async throws {
+        // The directory exists but is read-only, so only creating the file can fail.
+        let folder = scratch.container
+            .appendingPathComponent(EndpointInfo.relativePath)
+            .deletingLastPathComponent()
+        let manager = FileManager.default
+        try manager.createDirectory(at: folder, withIntermediateDirectories: true)
+        try manager.setAttributes([.posixPermissions: 0o500], ofItemAtPath: folder.path)
+        defer { try? manager.setAttributes([.posixPermissions: 0o700], ofItemAtPath: folder.path) }
+
+        await #expect(throws: CocoaError(.fileWriteUnknown)) {
+            try await AgentEndpoint.start(registry: makeRegistry(), container: scratch.container)
+        }
+    }
+
+    @Test func aStaleFileIsReplaced() async throws {
+        let url = scratch.container.appendingPathComponent(EndpointInfo.relativePath)
+        try FileManager.default.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
+        try Data("left behind by a crash".utf8).write(to: url)
+
+        let endpoint = try await start()
+        defer { endpoint.stop() }
+
+        let info = try JSONDecoder().decode(EndpointInfo.self, from: Data(contentsOf: url))
+        #expect(info == endpoint.info)
+    }
+
+    @Test func aStaleWorldReadableFileDoesNotKeepItsPermissions() async throws {
+        let url = scratch.container.appendingPathComponent(EndpointInfo.relativePath)
+        let manager = FileManager.default
+        try manager.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
+        #expect(manager.createFile(atPath: url.path, contents: Data("stale".utf8), attributes: [.posixPermissions: 0o644]))
+
+        let endpoint = try await start()
+        defer { endpoint.stop() }
+
+        let attributes = try manager.attributesOfItem(atPath: url.path)
+        #expect((attributes[.posixPermissions] as? NSNumber)?.intValue == 0o600)
+    }
+
+    @Test func stoppingTwiceLeavesALaterEndpointsFile() async throws {
+        let first = try await start()
+        first.stop()
+        let second = try await start()
+        defer { second.stop() }
+
+        first.stop()
+
+        let url = scratch.container.appendingPathComponent(EndpointInfo.relativePath)
+        #expect(FileManager.default.fileExists(atPath: url.path))
+    }
+
+    @Test func stoppingClosesConnectedClients() async throws {
+        let endpoint = try await start()
+        let client = try await connect(endpoint)
+
+        endpoint.stop()
+
+        #expect(await client.isClosedByServer())
     }
 
     @Test func eachStartHasANewToken() async throws {
@@ -319,7 +545,172 @@ struct AgentEndpointTests {
         #expect(error.code == .protocolMismatch)
     }
 
+    @Test(arguments: WrongToken.allCases)
+    private func aTokenThatDiffersAnywhereIsRejected(_ wrongToken: WrongToken) async throws {
+        let endpoint = try await start()
+        defer { endpoint.stop() }
+        let client = try Client(port: endpoint.info.port)
+        let wrong = wrongToken.applied(to: endpoint.info.token)
+        #expect(wrong != endpoint.info.token)
+
+        try await client.send(ClientHello(protocolVersion: WireProtocol.version, token: wrong))
+
+        guard case .rejected(let error) = try await client.receive(ServerHello.self) else {
+            Issue.record("Expected a rejection")
+            return
+        }
+        #expect(error.code == .unauthorized)
+    }
+
+    @Test func anAuthenticatedClientOutlivesTheHelloTimeout() async throws {
+        let endpoint = try await start()
+        defer { endpoint.stop() }
+        let client = try await connect(endpoint)
+
+        // Longer than the endpoint's 5 second hello timeout.
+        try await Task.sleep(for: .seconds(6))
+
+        #expect(try await perform(.runAction(key: "run"), on: client) == .done)
+    }
+
+    @Test func aHelloInABinaryFrameIsAccepted() async throws {
+        let endpoint = try await start()
+        defer { endpoint.stop() }
+        let client = try Client(port: endpoint.info.port)
+        let hello = ClientHello(protocolVersion: WireProtocol.version, token: endpoint.info.token)
+
+        try await client.sendBinary(try JSONEncoder().encode(hello))
+
+        #expect(try await client.receive(ServerHello.self) == .accepted)
+    }
+
+    @Test func aPingBeforeHelloIsAnsweredAndDoesNotCountAsAHello() async throws {
+        let endpoint = try await start()
+        defer { endpoint.stop() }
+        let client = try Client(port: endpoint.info.port)
+
+        try await client.ping()
+
+        try await client.send(ClientHello(protocolVersion: WireProtocol.version, token: endpoint.info.token))
+        #expect(try await client.receive(ServerHello.self) == .accepted)
+    }
+
     // MARK: - Requests
+
+    @Test func aResponseCarriesItsRequestsIdentifier() async throws {
+        let endpoint = try await start()
+        defer { endpoint.stop() }
+        let client = try await connect(endpoint)
+
+        try await client.send(RequestEnvelope(id: 42, request: .runAction(key: "run")))
+
+        #expect(try await client.receive(ResponseEnvelope.self).id == 42)
+    }
+
+    @Test func aSecondHelloAfterAuthenticatingIsABadRequest() async throws {
+        let endpoint = try await start()
+        defer { endpoint.stop() }
+        let client = try await connect(endpoint)
+
+        try await client.send(ClientHello(protocolVersion: WireProtocol.version, token: endpoint.info.token))
+
+        #expect(failureCode(try await client.receive(ResponseEnvelope.self).result) == .badRequest)
+    }
+
+    @Test func pipelinedRequestsAreAnsweredInOrder() async throws {
+        let registry = SaveStateRegistry(model: model, store: OverrideStore(suiteName: scratch.suiteName), isEnabled: true) { r in
+            r.toggle("On", key: "on", \.isOn)
+            r.action("Slow", key: "slow") { try await Task.sleep(for: .milliseconds(200)) }
+        }
+        let endpoint = try await start(registry)
+        defer { endpoint.stop() }
+        let client = try await connect(endpoint)
+
+        try await client.send(RequestEnvelope(id: 1, request: .runAction(key: "slow")))
+        try await client.send(RequestEnvelope(id: 2, request: .read(key: "on")))
+
+        #expect(try await client.receive(ResponseEnvelope.self).id == 1)
+        #expect(try await client.receive(ResponseEnvelope.self).id == 2)
+    }
+
+    // MARK: - Disconnection
+
+    /// A registry whose `wait` action holds the request open until the test releases it.
+    private func makeGatedRegistry(_ gate: Gate) -> SaveStateRegistry {
+        let model = model
+        return SaveStateRegistry(model: model, store: OverrideStore(suiteName: scratch.suiteName), isEnabled: true) { r in
+            r.action("Wait", key: "wait") {
+                await gate.arrive()
+                model.runs += 1
+            }
+            r.action("Other", key: "other") { model.scenarioRuns += 1 }
+        }
+    }
+
+    /// Polls, because the held action finishes on its own schedule after release.
+    private func actionFinished(within limit: Duration = .seconds(2)) async -> Bool {
+        let deadline = ContinuousClock.now + limit
+        while model.runs == 0, ContinuousClock.now < deadline {
+            try? await Task.sleep(for: .milliseconds(10))
+        }
+        return model.runs == 1
+    }
+
+    @Test(.timeLimit(.minutes(1))) func aClientThatDisconnectsMidRequestLeavesTheEndpointServing() async throws {
+        let gate = Gate()
+        let endpoint = try await start(makeGatedRegistry(gate))
+        defer { endpoint.stop() }
+        let leaving = try await connect(endpoint)
+        try await leaving.send(RequestEnvelope(id: 1, request: .runAction(key: "wait")))
+        await gate.waitForArrival()
+
+        leaving.disconnect()
+        await gate.release()
+
+        #expect(await actionFinished())
+        let next = try await connect(endpoint)
+        #expect(try await perform(.runAction(key: "other"), on: next) == .done)
+    }
+
+    @Test(.timeLimit(.minutes(1))) func stoppingMidRequestFinishesTheWorkAndAnswersNobody() async throws {
+        let gate = Gate()
+        let endpoint = try await start(makeGatedRegistry(gate))
+        let client = try await connect(endpoint)
+        try await client.send(RequestEnvelope(id: 1, request: .runAction(key: "wait")))
+        await gate.waitForArrival()
+
+        endpoint.stop()
+        await gate.release()
+
+        #expect(await actionFinished())
+        // A response would decode here instead of throwing.
+        await #expect(throws: (any Error).self) {
+            try await client.receive(ResponseEnvelope.self)
+        }
+    }
+
+    @Test func anIdleClientDisconnectingLeavesOthersConnected() async throws {
+        let endpoint = try await start()
+        defer { endpoint.stop() }
+        let leaving = try await connect(endpoint)
+        let staying = try await connect(endpoint)
+
+        leaving.disconnect()
+
+        #expect(try await perform(.runAction(key: "run"), on: staying) == .done)
+    }
+
+    @Test func aMessageOverTheSizeLimitClosesOnlyThatConnection() async throws {
+        let endpoint = try await start()
+        defer { endpoint.stop() }
+        let oversized = try await connect(endpoint)
+        let other = try await connect(endpoint)
+
+        try? await oversized.sendRaw(String(repeating: "x", count: (1 << 20) + 1))
+
+        #expect(await oversized.isClosedByServer(within: .seconds(3)))
+        #expect(try await perform(.runAction(key: "run"), on: other) == .done)
+    }
 
     @Test func describesAndReads() async throws {
         let endpoint = try await start()
@@ -450,6 +841,23 @@ struct AgentEndpointTests {
         #expect(failureCode(try await perform(.applyScenario(key: "nope"), on: client)) == .unknownScenario)
     }
 
+    @Test func aClosedClientIsReleased() async throws {
+        let endpoint = try await start()
+        defer { endpoint.stop() }
+        var client: Client? = try await connect(endpoint)
+        #expect(endpoint.connectionCount == 1)
+        _ = client
+
+        client = nil
+
+        var waited = Duration.zero
+        while endpoint.connectionCount > 0, waited < .seconds(3) {
+            try await Task.sleep(for: .milliseconds(50))
+            waited += .milliseconds(50)
+        }
+        #expect(endpoint.connectionCount == 0)
+    }
+
     @Test func aMalformedMessageIsReportedAndTheConnectionSurvives() async throws {
         let endpoint = try await start()
         defer { endpoint.stop() }
@@ -465,36 +873,27 @@ struct AgentEndpointTests {
 
     // MARK: - Network exposure
 
-    @Test func onlyListensOnLoopback() async throws {
+    #if os(macOS)
+    @Test func theListeningSocketIsBoundToLoopbackOnly() async throws {
+        let endpoint = try await start()
+        defer { endpoint.stop() }
+        let port = endpoint.info.port
+
+        let addresses = try listeningAddresses().filter { $0.hasSuffix(":\(port)") }
+
+        #expect(addresses == ["127.0.0.1:\(port)"])
+    }
+    #endif
+
+    /// Disabled, so reported as skipped, on a machine with no other interface.
+    @Test(.enabled(if: nonLoopbackAddress() != nil))
+    func theEndpointCantBeReachedFromAnotherInterface() async throws {
+        let address = try #require(nonLoopbackAddress())
         let endpoint = try await start()
         defer { endpoint.stop() }
         #expect(canConnect(host: "127.0.0.1", port: endpoint.info.port))
-        // A machine with no other interface has nothing to check.
-        guard let address = Self.nonLoopbackAddress() else { return }
 
         #expect(!canConnect(host: address, port: endpoint.info.port))
-    }
-
-    /// This Mac's first non-loopback IPv4 address, if it has one.
-    private static func nonLoopbackAddress() -> String? {
-        var first: UnsafeMutablePointer<ifaddrs>?
-        guard getifaddrs(&first) == 0 else { return nil }
-        defer { freeifaddrs(first) }
-        var next = first
-        while let current = next {
-            defer { next = current.pointee.ifa_next }
-            guard let address = current.pointee.ifa_addr,
-                  address.pointee.sa_family == sa_family_t(AF_INET),
-                  current.pointee.ifa_flags & UInt32(IFF_LOOPBACK) == 0,
-                  current.pointee.ifa_flags & UInt32(IFF_UP) != 0
-            else { continue }
-            var host = [CChar](repeating: 0, count: Int(NI_MAXHOST))
-            guard getnameinfo(address, socklen_t(address.pointee.sa_len), &host, socklen_t(host.count), nil, 0, NI_NUMERICHOST) == 0 else {
-                continue
-            }
-            return String(bytes: host.prefix { $0 != 0 }.map { UInt8(bitPattern: $0) }, encoding: .utf8)
-        }
-        return nil
     }
 }
 #endif

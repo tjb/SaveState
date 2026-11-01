@@ -1,4 +1,3 @@
-import Observation
 import SaveState
 import SwiftUI
 
@@ -12,8 +11,7 @@ public struct SaveStatePanel: View {
     private let registry: SaveStateRegistry
 
     @State private var runState: PanelRunState
-    @State private var resetAllCount = 0
-    @State private var actionToConfirm: ActionDescription?
+    @State private var session = PanelSession()
 
     /// Creates the panel for a registry.
     public init(registry: SaveStateRegistry) {
@@ -26,14 +24,18 @@ public struct SaveStatePanel: View {
     }
 
     public var body: some View {
-        if registry.isEnabled {
+        if model.isVisible {
             panel(registry.describe())
         }
     }
 
+    private var model: PanelModel {
+        PanelModel(registry: registry, runState: runState, session: session)
+    }
+
     private func panel(_ description: RegistryDescription) -> some View {
         VStack(alignment: .leading, spacing: 12) {
-            header(changedCount: description.controls.filter(\.isChanged).count)
+            header(PanelStatus(description))
             if let message = runState.message {
                 messageLabel(message)
             }
@@ -57,15 +59,15 @@ public struct SaveStatePanel: View {
         // squeezing the controls.
         .dynamicTypeSize(...DynamicTypeSize.accessibility2)
         .alert(
-            "Run \(actionToConfirm?.label ?? "action")?",
+            model.confirmationTitleKey,
             isPresented: Binding(
-                get: { actionToConfirm != nil },
-                set: { if !$0 { actionToConfirm = nil } }
+                get: { session.actionToConfirm != nil },
+                set: { if !$0 { model.cancelConfirmation() } }
             ),
-            presenting: actionToConfirm
+            presenting: session.actionToConfirm
         ) { action in
             Button("Run", role: .destructive) {
-                run(action, allowDestructive: true)
+                model.confirm(action)
             }
             .accessibilityIdentifier("saveState.confirmAction")
             Button("Cancel", role: .cancel) {}
@@ -76,28 +78,25 @@ public struct SaveStatePanel: View {
 
     // MARK: - Header
 
-    private func header(changedCount: Int) -> some View {
+    private func header(_ status: PanelStatus) -> some View {
         VStack(alignment: .leading, spacing: 8) {
             HStack {
                 Text("Debug Panel")
                     .font(.headline)
                 Spacer()
-                Button("Reset All", action: resetAll)
+                Button("Reset All") { model.resetAll() }
                     .controlSize(.small)
                     .overlayPanelButtonStyle()
-                    .disabled(changedCount == 0)
+                    .disabled(!status.canResetAll)
                     .accessibilityIdentifier("saveState.resetAll")
             }
             Group {
-                if changedCount == 0 {
-                    Label("Everything at its default", systemImage: "checkmark.seal")
+                if status.isAtDefault {
+                    Label(status.textKey, systemImage: status.systemImage)
                         .foregroundStyle(.secondary)
                 } else {
-                    Label(
-                        changedCount == 1 ? "1 control changed" : "\(changedCount) controls changed",
-                        systemImage: "wrench.and.screwdriver"
-                    )
-                    .foregroundStyle(.orange)
+                    Label(status.textKey, systemImage: status.systemImage)
+                        .foregroundStyle(.orange)
                 }
             }
             .font(.footnote)
@@ -127,9 +126,9 @@ public struct SaveStatePanel: View {
                 ForEach(group.items, id: \.key) { control in
                     ControlRow(
                         control: control,
-                        resetAllCount: resetAllCount,
-                        change: { change($0, of: control) },
-                        reset: { reset(control) }
+                        resetAllCount: session.resetAllCount,
+                        change: { model.change($0, of: control) },
+                        reset: { model.reset(control) }
                     )
                 }
             }
@@ -155,25 +154,21 @@ public struct SaveStatePanel: View {
 
     private func actionButton(_ action: ActionDescription) -> some View {
         Button(role: action.isDestructive ? .destructive : nil) {
-            if action.isDestructive {
-                actionToConfirm = action
-            } else {
-                run(action, allowDestructive: false)
-            }
+            model.request(action)
         } label: {
             HStack {
                 Text(action.label)
                     // Glass buttons don't color destructive roles themselves.
                     .foregroundStyle(action.isDestructive ? .red : .primary)
                 Spacer()
-                if runState.runningKey == action.key {
+                if model.isRunning(action.key) {
                     ProgressView().controlSize(.small)
                 }
             }
             .frame(maxWidth: .infinity)
         }
         .overlayPanelButtonStyle()
-        .disabled(runState.runningKey != nil)
+        .disabled(model.isBusy)
         .accessibilityIdentifier("saveState.action.\(action.key)")
     }
 
@@ -196,7 +191,7 @@ public struct SaveStatePanel: View {
 
     private func scenarioButton(_ scenario: ScenarioDescription) -> some View {
         Button {
-            apply(scenario)
+            model.apply(scenario)
         } label: {
             HStack {
                 VStack(alignment: .leading, spacing: 2) {
@@ -210,7 +205,7 @@ public struct SaveStatePanel: View {
                     }
                 }
                 Spacer()
-                if runState.runningKey == scenario.key {
+                if model.isRunning(scenario.key) {
                     ProgressView().controlSize(.small)
                 }
             }
@@ -218,7 +213,7 @@ public struct SaveStatePanel: View {
         }
         .overlayPanelButtonStyle()
         .buttonBorderShape(.roundedRectangle(radius: 12))
-        .disabled(runState.runningKey != nil)
+        .disabled(model.isBusy)
         .accessibilityIdentifier("saveState.scenario.\(scenario.key)")
     }
 
@@ -227,76 +222,4 @@ public struct SaveStatePanel: View {
             .font(.subheadline.weight(.semibold))
             .accessibilityAddTraits(.isHeader)
     }
-
-    // MARK: - Changing
-
-    private func change(_ value: ControlValue, of control: ControlDescription) {
-        perform { try registry.set(value, forKey: control.key, persist: true) }
-    }
-
-    private func reset(_ control: ControlDescription) {
-        perform { try registry.reset(control.key) }
-    }
-
-    private func resetAll() {
-        perform { try registry.resetAll() }
-        resetAllCount += 1
-    }
-
-    private func perform(_ change: () throws -> Void) {
-        do {
-            try change()
-            runState.message = nil
-        } catch {
-            runState.message = PanelMessage(text: String(describing: error), isError: true)
-        }
-    }
-
-    private func run(_ action: ActionDescription, allowDestructive: Bool) {
-        runInBackground(key: action.key, success: "Ran \(action.label)") {
-            try await registry.runAction(action.key, allowDestructive: allowDestructive)
-        }
-    }
-
-    private func apply(_ scenario: ScenarioDescription) {
-        runInBackground(key: scenario.key, success: "Applied \(scenario.label)") {
-            try await registry.applyScenario(scenario.key)
-        }
-    }
-
-    private func runInBackground(
-        key: String,
-        success: String,
-        work: @escaping @MainActor () async throws -> Void
-    ) {
-        runState.runningKey = key
-        runState.message = nil
-        // Captures the run state rather than the view, so a run that outlasts
-        // the popover still reports to the panel when it reopens.
-        Task { [runState] in
-            defer { runState.runningKey = nil }
-            do {
-                try await work()
-                runState.message = PanelMessage(text: success, isError: false)
-            } catch {
-                runState.message = PanelMessage(text: String(describing: error), isError: true)
-            }
-        }
-    }
-}
-
-/// A line at the top of the panel reporting how the last operation went.
-struct PanelMessage {
-    let text: String
-    let isError: Bool
-}
-
-/// The action or scenario in progress and how the last one went. It outlives the
-/// popover, so closing and reopening the panel can't start a second run or lose a
-/// failure.
-@MainActor
-@Observable
-final class PanelRunState {
-    var runningKey: String?
-    var message: PanelMessage?
 }

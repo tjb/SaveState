@@ -33,8 +33,8 @@ final class DemoState {
         trialEndOverride ?? realTrialEnd
     }
 
-    static func makeRegistry(for state: DemoState) -> SaveStateRegistry {
-        SaveStateRegistry(model: state) { r in
+    static func makeRegistry(for state: DemoState, isEnabled: Bool = SaveStateBuild.isDebug) -> SaveStateRegistry {
+        SaveStateRegistry(model: state, isEnabled: isEnabled) { r in
             r.section("Purchases") {
                 r.triState("Premium", key: "premium", \.premiumOverride, real: { state.isEntitled })
                 r.date("Trial ends", key: "trial-end", \.trialEndOverride, real: { state.realTrialEnd })
@@ -49,6 +49,9 @@ final class DemoState {
             r.clock()
             r.action("Seed projects", key: "seed") {
                 state.seededProjects += 5
+            }
+            r.action("Sync slowly", key: "slow-sync") {
+                try await Task.sleep(for: .seconds(45))
             }
             r.action("Erase projects", key: "erase", destructive: true) {
                 state.seededProjects = 0

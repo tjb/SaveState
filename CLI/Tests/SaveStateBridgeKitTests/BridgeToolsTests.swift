@@ -1,7 +1,7 @@
 import Foundation
 import MCP
 import SaveState
-import SaveStateAgent
+@testable import SaveStateAgent
 import SaveStateProtocol
 import Testing
 @testable import SaveStateBridgeKit
@@ -262,6 +262,48 @@ struct BridgeToolsTests {
         #expect(model.name == url)
     }
 
+    @Test func aCallLeavesNoConnectionOpen() async throws {
+        let endpoint = try await start()
+        defer { endpoint.stop() }
+
+        #expect(await call("savestate_describe").isError != true)
+
+        // Discovery's port check opens a connection that never says hello, which the
+        // endpoint drops at its 5 second hello timeout. A connection the call itself
+        // left open has said hello, so it would outlast this wait.
+        var waited = Duration.zero
+        while endpoint.connectionCount > 0, waited < .seconds(8) {
+            try await Task.sleep(for: .milliseconds(50))
+            waited += .milliseconds(50)
+        }
+        #expect(endpoint.connectionCount == 0)
+    }
+
+    @Test func aSetWithNoValueLeavesTheOverrideAlone() async throws {
+        let endpoint = try await start()
+        defer { endpoint.stop() }
+        model.premium = true
+
+        let result = await call("savestate_set", ["key": "premium"])
+
+        #expect(result.isError == true)
+        #expect(model.premium == true)
+    }
+
+    @Test func successMessagesNameWhatRan() async throws {
+        let endpoint = try await start()
+        defer { endpoint.stop() }
+
+        #expect(text(await call("savestate_run_action", ["key": "run"])).contains("run"))
+        #expect(text(await call("savestate_apply_scenario", ["key": "expired-trial"])).contains("expired-trial"))
+    }
+
+    @Test func runActionsDescriptionWarnsAboutDestructiveActions() throws {
+        let tool = try #require(BridgeTools.definitions.first { $0.name == "savestate_run_action" })
+
+        #expect(tool.description?.contains("destructive") == true)
+    }
+
     @Test func aMisspelledArgumentIsRejected() async throws {
         let endpoint = try await start()
         defer { endpoint.stop() }
@@ -455,6 +497,46 @@ struct BridgeToolsTests {
         #expect(text(result).contains("relaunch"))
     }
 
+    // MARK: - Through a real MCP client
+
+    // These live in this serialized suite because a new AgentEndpoint replaces the
+    // process's running one.
+    private func connectedClient() async throws -> (Client, Server) {
+        let (clientSide, serverSide) = await InMemoryTransport.createConnectedPair()
+        let server = await Bridge.makeServer(tools: tools)
+        try await server.start(transport: serverSide)
+        let client = Client(name: "test", version: "1")
+        _ = try await client.connect(transport: clientSide)
+        return (client, server)
+    }
+
+    @Test func anAgentAppliesAScenarioOverMCP() async throws {
+        let endpoint = try await start()
+        defer { endpoint.stop() }
+        let (client, server) = try await connectedClient()
+
+        let (_, isError) = try await client.callTool(name: "savestate_apply_scenario", arguments: ["key": "expired-trial"])
+
+        #expect(isError != true)
+        #expect(model.premium == false)
+        await client.disconnect()
+        await server.stop()
+    }
+
+    @Test func aDataURLStringSurvivesTheMCPWireAsText() async throws {
+        let endpoint = try await start()
+        defer { endpoint.stop() }
+        let (client, server) = try await connectedClient()
+        let url = "data:text/plain;base64,aGk="
+
+        let (_, isError) = try await client.callTool(name: "savestate_set", arguments: ["key": "name", "value": .string(url)])
+
+        #expect(isError != true)
+        #expect(model.name == url)
+        await client.disconnect()
+        await server.stop()
+    }
+
     private func write(_ info: EndpointInfo, to container: String) throws {
         let file = scratch.container(container).appendingPathComponent(EndpointInfo.relativePath)
         try FileManager.default.createDirectory(at: file.deletingLastPathComponent(), withIntermediateDirectories: true)
@@ -490,6 +572,18 @@ struct SimulatorListingTests {
         #expect(throws: (any Error).self) {
             _ = try AppDiscovery.parseDevices(Data("not json".utf8))
         }
+    }
+
+    @Test func devicesAreSortedSoSelectionIsStable() throws {
+        let json = """
+        {"devices":{"iOS-27":[
+          {"udid":"B","state":"Booted","dataPath":"/b"},
+          {"udid":"A","state":"Booted","dataPath":"/a"},
+          {"udid":"C","state":"Booted","dataPath":"/c"}
+        ]}}
+        """
+
+        #expect(try AppDiscovery.parseDevices(Data(json.utf8)).map(\.identifier) == ["A", "B", "C"])
     }
 
     @Test func keepsOnlyBootedDevices() throws {

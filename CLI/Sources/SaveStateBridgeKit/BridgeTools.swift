@@ -319,7 +319,7 @@ private struct AppListing: Encodable {
 enum ControlValueConversion {
     static func value(from json: Value, kind: ControlKind) throws -> ControlValue {
         guard let value = convert(json, kind: kind), let normalized = kind.normalize(value) else {
-            throw BridgeError("A \(name(of: kind)) control can't take \(describe(json)). It takes \(accepted(by: kind)).")
+            throw BridgeError("\(article(for: kind)) \(name(of: kind)) control can't take \(describe(json)). It takes \(accepted(by: kind)).")
         }
         return normalized
     }
@@ -352,6 +352,10 @@ enum ControlValueConversion {
         default:
             return nil
         }
+    }
+
+    private static func article(for kind: ControlKind) -> String {
+        kind == .integer ? "An" : "A"
     }
 
     private static func name(of kind: ControlKind) -> String {
