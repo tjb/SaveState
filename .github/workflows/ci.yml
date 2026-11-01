@@ -111,10 +111,9 @@ jobs:
       - uses: actions/checkout@v5
       - run: xcodebuild -version
       - name: Test the demo in the simulator
-        # These flags ask for one retry of a failed UI test, but on this runner the test
-        # runner has restarted after a failure and not retried the test, so a failure
-        # may still fail the job. A retry that does fire can hide a real intermittent
-        # bug, so read "failed" lines in passing runs.
+        # xcodebuild's own retry flags haven't fired on this runner, so failed tests
+        # get one rerun from a script. A test that only passes on the rerun leaves a
+        # warning on the run, because it can be a real intermittent bug.
         run: |
           udid="$(xcrun simctl list devices available -j | python3 -c "
           import json, sys
@@ -122,15 +121,17 @@ jobs:
           ios = sorted((k for k in runtimes if 'iOS' in k), reverse=True)
           print(next(d['udid'] for k in ios for d in runtimes[k] if d['name'].startswith('iPhone')))
           ")"
-          xcodebuild test \
-            -project Examples/SaveStateDemo/SaveStateDemo.xcodeproj \
-            -scheme SaveStateDemo \
-            -destination "id=$udid" \
-            -derivedDataPath "$RUNNER_TEMP/demo" \
-            -retry-tests-on-failure \
-            -test-iterations 2 2>&1 | tee demo.log; status=${PIPESTATUS[0]}
-          bash "$GITHUB_WORKSPACE/.github/scripts/annotate-errors.sh" demo.log
-          [[ "$status" == 0 ]] || exit "$status"
+          args=(
+            -project Examples/SaveStateDemo/SaveStateDemo.xcodeproj
+            -scheme SaveStateDemo
+            -destination "id=$udid"
+            -derivedDataPath "$RUNNER_TEMP/demo"
+          )
+          xcodebuild test "${args[@]}" 2>&1 | tee demo.log; status=${PIPESTATUS[0]}
+          if [[ "$status" != 0 ]]; then
+            bash "$GITHUB_WORKSPACE/.github/scripts/annotate-errors.sh" demo.log
+            bash .github/scripts/rerun-failed-ui-tests.sh demo.log SaveStateDemoUITests "${args[@]}"
+          fi
           echo "udid=$udid" >> "$GITHUB_ENV"
       - name: Drive the demo through the MCP server
         run: |
