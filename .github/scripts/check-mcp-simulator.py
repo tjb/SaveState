@@ -13,6 +13,9 @@ import threading
 import time
 
 BUNDLE = "dev.tjb.SaveStateDemo"
+# Long enough for a slow boot, and short enough to report a hung simulator rather than
+# run into the job's timeout.
+RETRY_SECONDS = 300
 
 
 class Server:
@@ -70,10 +73,12 @@ def relaunch(server, udid):
     """Relaunches the demo and waits for its new endpoint to answer."""
     subprocess.run(["xcrun", "simctl", "terminate", udid, BUNDLE], check=True)
     subprocess.run(["xcrun", "simctl", "launch", udid, BUNDLE], check=True, stdout=subprocess.DEVNULL)
-    for _ in range(40):
-        failed, _text = server.call("savestate_describe", app=BUNDLE)
+    deadline = time.monotonic() + RETRY_SECONDS
+    while time.monotonic() < deadline:
+        failed, text = server.call("savestate_describe", app=BUNDLE)
         if not failed:
             return
+        print(f"retrying: the demo isn't back yet: {text}")
         time.sleep(0.5)
     raise SystemExit("FAILED: the demo didn't come back after a relaunch")
 
@@ -107,10 +112,14 @@ def main():
     )
 
     # A simulator that just booted can be slow to answer, and the app slow to listen.
-    for _ in range(30):
+    deadline = time.monotonic() + RETRY_SECONDS
+    while True:
         failed, text = server.call("savestate_list_apps")
         apps = json.loads(text) if not failed else []
         if any(a["bundleIdentifier"] == BUNDLE and a["device"] == udid for a in apps):
+            break
+        print(f"retrying: the demo isn't listed yet: {text}")
+        if time.monotonic() > deadline:
             break
         time.sleep(3)
     expect(any(a["bundleIdentifier"] == BUNDLE and a["device"] == udid for a in apps), "it finds the demo", text)
