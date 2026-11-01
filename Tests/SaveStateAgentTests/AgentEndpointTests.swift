@@ -840,6 +840,23 @@ struct AgentEndpointTests {
         #expect(failureCode(try await perform(.applyScenario(key: "nope"), on: client)) == .unknownScenario)
     }
 
+    @Test func aClosedClientIsReleased() async throws {
+        let endpoint = try await start()
+        defer { endpoint.stop() }
+        var client: Client? = try await connect(endpoint)
+        #expect(endpoint.connectionCount == 1)
+        _ = client
+
+        client = nil
+
+        var waited = Duration.zero
+        while endpoint.connectionCount > 0, waited < .seconds(3) {
+            try await Task.sleep(for: .milliseconds(50))
+            waited += .milliseconds(50)
+        }
+        #expect(endpoint.connectionCount == 0)
+    }
+
     @Test func aMalformedMessageIsReportedAndTheConnectionSurvives() async throws {
         let endpoint = try await start()
         defer { endpoint.stop() }

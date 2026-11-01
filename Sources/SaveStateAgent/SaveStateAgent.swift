@@ -39,6 +39,8 @@ public final class AgentEndpoint {
     private let listener: NWListener
     private let fileURL: URL
     private var connections: [ObjectIdentifier: AgentConnection] = [:]
+    /// How many clients are connected, so tests can see closed ones are released.
+    var connectionCount: Int { connections.count }
     private var isStopped = false
 
     /// Starts the endpoint, replacing one already running, and returns once it's

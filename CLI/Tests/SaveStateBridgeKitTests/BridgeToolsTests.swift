@@ -1,7 +1,7 @@
 import Foundation
 import MCP
 import SaveState
-import SaveStateAgent
+@testable import SaveStateAgent
 import SaveStateProtocol
 import Testing
 @testable import SaveStateBridgeKit
@@ -260,6 +260,45 @@ struct BridgeToolsTests {
 
         #expect(result.isError != true, "\(text(result))")
         #expect(model.name == url)
+    }
+
+    @Test func aCallLeavesNoConnectionOpen() async throws {
+        let endpoint = try await start()
+        defer { endpoint.stop() }
+
+        #expect(await call("savestate_describe").isError != true)
+
+        var waited = Duration.zero
+        while endpoint.connectionCount > 0, waited < .seconds(3) {
+            try await Task.sleep(for: .milliseconds(50))
+            waited += .milliseconds(50)
+        }
+        #expect(endpoint.connectionCount == 0)
+    }
+
+    @Test func aSetWithNoValueLeavesTheOverrideAlone() async throws {
+        let endpoint = try await start()
+        defer { endpoint.stop() }
+        model.premium = true
+
+        let result = await call("savestate_set", ["key": "premium"])
+
+        #expect(result.isError == true)
+        #expect(model.premium == true)
+    }
+
+    @Test func successMessagesNameWhatRan() async throws {
+        let endpoint = try await start()
+        defer { endpoint.stop() }
+
+        #expect(text(await call("savestate_run_action", ["key": "run"])).contains("run"))
+        #expect(text(await call("savestate_apply_scenario", ["key": "expired-trial"])).contains("expired-trial"))
+    }
+
+    @Test func runActionsDescriptionWarnsAboutDestructiveActions() throws {
+        let tool = try #require(BridgeTools.definitions.first { $0.name == "savestate_run_action" })
+
+        #expect(tool.description?.contains("destructive") == true)
     }
 
     @Test func aMisspelledArgumentIsRejected() async throws {
@@ -530,6 +569,18 @@ struct SimulatorListingTests {
         #expect(throws: (any Error).self) {
             _ = try AppDiscovery.parseDevices(Data("not json".utf8))
         }
+    }
+
+    @Test func devicesAreSortedSoSelectionIsStable() throws {
+        let json = """
+        {"devices":{"iOS-27":[
+          {"udid":"B","state":"Booted","dataPath":"/b"},
+          {"udid":"A","state":"Booted","dataPath":"/a"},
+          {"udid":"C","state":"Booted","dataPath":"/c"}
+        ]}}
+        """
+
+        #expect(try AppDiscovery.parseDevices(Data(json.utf8)).map(\.identifier) == ["A", "B", "C"])
     }
 
     @Test func keepsOnlyBootedDevices() throws {
