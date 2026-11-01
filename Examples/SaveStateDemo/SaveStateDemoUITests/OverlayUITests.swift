@@ -61,19 +61,18 @@ final class OverlayUITests: XCTestCase {
         let end = app.coordinate(withNormalizedOffset: CGVector(dx: 0.22, dy: 0.0))
             .withOffset(CGVector(dx: 0, dy: top + 80))
         for _ in 0..<8 where !isVisible() {
-            // Holding at the end stops the scroll. A tap on a view that's still
-            // moving only stops it, and doesn't reach the control under the finger.
-            start.press(forDuration: 0.05, thenDragTo: end, withVelocity: .default, thenHoldForDuration: 0.3)
+            start.press(forDuration: 0.05, thenDragTo: end)
         }
         XCTAssertTrue(isVisible(), "\(identifier) isn't reachable")
     }
 
-    /// Taps a switch until its value changes. A tap can miss on a slow runner, so
-    /// it tries again, but only while the value hasn't changed, and a switch that
-    /// never responds still fails.
+    /// Taps a switch until its value changes. A tap sometimes has no effect on CI
+    /// runners, for a reason that isn't known yet, so this works around that, and
+    /// records each miss so the cause can be found. A switch that never responds
+    /// still fails.
     private func toggle(_ control: XCUIElement) {
         let before = control.value as? String ?? ""
-        for _ in 0..<3 {
+        for attempt in 1...3 {
             control.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5)).tap()
             // An expectation can only be waited on once, so each try needs its own.
             let changed = XCTNSPredicateExpectation(
@@ -81,8 +80,23 @@ final class OverlayUITests: XCTestCase {
                 object: control
             )
             if XCTWaiter.wait(for: [changed], timeout: 5) == .completed { return }
+            // A stall can outlast the wait, and tapping again would flip it back.
+            if control.value as? String != before { return }
+            print("savestate-missed-tap: \(control.identifier) stayed at \(before) after tap \(attempt)")
+            recordState(named: "Missed tap \(attempt)")
         }
         XCTFail("\(control.identifier) stayed at \(before) after three taps")
+    }
+
+    /// Keeps a screenshot and the accessibility hierarchy in the test results.
+    private func recordState(named name: String) {
+        let screenshot = XCTAttachment(screenshot: app.screenshot())
+        let hierarchy = XCTAttachment(string: app.debugDescription)
+        for attachment in [screenshot, hierarchy] {
+            attachment.name = name
+            attachment.lifetime = .keepAlways
+            add(attachment)
+        }
     }
 
     func testOverlayChangesPersistAcrossRelaunchUntilReset() {
