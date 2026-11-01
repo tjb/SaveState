@@ -147,6 +147,11 @@ struct PremiumToggleModel {
         provider.isPremium ? "Premium is on" : "Premium is off"
     }
 
+    /// The status as SwiftUI shows it, as a localization key.
+    var statusTextKey: LocalizedStringKey {
+        LocalizedStringKey(statusText)
+    }
+
     var statusImage: String {
         provider.isPremium ? "crown.fill" : "crown"
     }
@@ -234,7 +239,7 @@ private struct PremiumToggleButton<Provider: PremiumStatusProvider>: View {
     /// The status the app acts on. The registry can't report it as a real value,
     /// because `isPremium` includes any override.
     private var status: some View {
-        Label(model.statusText, systemImage: model.statusImage)
+        Label(model.statusTextKey, systemImage: model.statusImage)
         .font(.footnote)
         .accessibilityElement(children: .combine)
         .accessibilityIdentifier("premiumToggle.status")

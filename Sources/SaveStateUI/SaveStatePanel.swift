@@ -59,7 +59,7 @@ public struct SaveStatePanel: View {
         // squeezing the controls.
         .dynamicTypeSize(...DynamicTypeSize.accessibility2)
         .alert(
-            model.confirmationTitle,
+            model.confirmationTitleKey,
             isPresented: Binding(
                 get: { session.actionToConfirm != nil },
                 set: { if !$0 { model.cancelConfirmation() } }
@@ -92,10 +92,10 @@ public struct SaveStatePanel: View {
             }
             Group {
                 if status.isAtDefault {
-                    Label(status.text, systemImage: status.systemImage)
+                    Label(status.textKey, systemImage: status.systemImage)
                         .foregroundStyle(.secondary)
                 } else {
-                    Label(status.text, systemImage: status.systemImage)
+                    Label(status.textKey, systemImage: status.systemImage)
                         .foregroundStyle(.orange)
                 }
             }

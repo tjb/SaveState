@@ -2,5 +2,6 @@
   "Sources/SaveStateBridgeKit/AppClient.swift": 95,
   "Sources/SaveStateBridgeKit/AppDiscovery.swift": 94,
   "Sources/SaveStateBridgeKit/Bridge.swift": 89,
-  "Sources/SaveStateBridgeKit/BridgeTools.swift": 98
+  "Sources/SaveStateBridgeKit/BridgeTools.swift": 98,
+  "Sources/SaveStateCLI/SaveStateCommand.swift": 0
 }

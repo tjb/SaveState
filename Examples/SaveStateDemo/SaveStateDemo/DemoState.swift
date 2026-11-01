@@ -51,7 +51,7 @@ final class DemoState {
                 state.seededProjects += 5
             }
             r.action("Sync slowly", key: "slow-sync") {
-                try await Task.sleep(for: .seconds(25))
+                try await Task.sleep(for: .seconds(45))
             }
             r.action("Erase projects", key: "erase", destructive: true) {
                 state.seededProjects = 0

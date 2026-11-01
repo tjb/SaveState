@@ -143,14 +143,14 @@ private struct TriStateEditor: View {
                 set: { change($0) }
             )) {
                 ForEach(TriStateOption.all, id: \.value) { option in
-                    Text(option.title).tag(option.value)
+                    Text(option.titleKey).tag(option.value)
                 }
             }
             .pickerStyle(.segmented)
             .labelsHidden()
             .accessibilityIdentifier(identifier)
 
-            if let caption = TriStateOption.realCaption(for: control) {
+            if let caption = TriStateOption.realCaptionKey(for: control) {
                 Text(caption)
                     .font(.caption)
                     .foregroundStyle(.secondary)
@@ -206,7 +206,7 @@ private struct TextEditorField: View {
                 .onDisappear(perform: applyDraft)
                 .accessibilityIdentifier(identifier)
             if draft.isInvalid {
-                Text(TextDraft.invalidMessage(for: control.kind))
+                Text(TextDraft.invalidMessageKey(for: control.kind))
                     .font(.caption)
                     .foregroundStyle(.red)
             }
@@ -275,7 +275,7 @@ private struct DateEditor: View {
                 }
             } else {
                 HStack {
-                    Text(model.placeholder)
+                    Text(model.placeholderKey)
                         .font(.footnote)
                         .foregroundStyle(.secondary)
                     Spacer()
@@ -288,7 +288,7 @@ private struct DateEditor: View {
                     .accessibilityIdentifier(ControlRowModel.setIdentifier(editor: identifier))
                 }
             }
-            if let caption = model.realCaption {
+            if let caption = model.realCaptionKey {
                 Text(caption)
                     .font(.caption)
                     .foregroundStyle(.secondary)

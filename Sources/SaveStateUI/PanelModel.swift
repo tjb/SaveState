@@ -1,5 +1,6 @@
 import Observation
 import SaveState
+import SwiftUI
 
 /// A line at the top of the panel reporting how the last operation went.
 struct PanelMessage: Equatable {
@@ -48,6 +49,13 @@ struct PanelStatus: Equatable {
         isAtDefault ? "Everything at its default" : accessibilityValue
     }
 
+    /// The status as SwiftUI shows it. String literals here are localization keys,
+    /// so a host app's translations apply.
+    var textKey: LocalizedStringKey {
+        if isAtDefault { return "Everything at its default" }
+        return changedCount == 1 ? "1 control changed" : "\(changedCount) controls changed"
+    }
+
     var systemImage: String {
         isAtDefault ? "checkmark.seal" : "wrench.and.screwdriver"
     }
@@ -77,6 +85,11 @@ struct PanelModel {
     }
 
     var confirmationTitle: String {
+        "Run \(session.actionToConfirm?.label ?? "action")?"
+    }
+
+    /// The alert's title as SwiftUI shows it, as a localization key.
+    var confirmationTitleKey: LocalizedStringKey {
         "Run \(session.actionToConfirm?.label ?? "action")?"
     }
 

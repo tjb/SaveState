@@ -105,8 +105,9 @@ private final class Client: Sendable {
                 }
             }
             group.addTask {
+                // Cancelling here would make the receive above throw and report a
+                // close that this timeout caused. The cancel below cleans up instead.
                 try? await Task.sleep(for: limit)
-                task.cancel(with: .goingAway, reason: nil)
                 return false
             }
             let result = await group.next() ?? false

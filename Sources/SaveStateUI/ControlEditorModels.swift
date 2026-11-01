@@ -1,5 +1,6 @@
 import Foundation
 import SaveState
+import SwiftUI
 
 /// What one row shows around its editor, and the identifiers UI tests find it by.
 struct ControlRowModel {
@@ -41,8 +42,19 @@ struct TriStateOption {
         TriStateOption(title: "Real", value: .null)
     ]
 
+    /// The segment's title as SwiftUI shows it, as a localization key.
+    var titleKey: LocalizedStringKey {
+        LocalizedStringKey(title)
+    }
+
     /// The caption under the picker, when the control reports a real value.
     static func realCaption(for control: ControlDescription) -> String? {
+        guard case .bool(let real)? = control.realValue else { return nil }
+        return "Real value: \(real ? "on" : "off")"
+    }
+
+    /// The caption as SwiftUI shows it, as a localization key.
+    static func realCaptionKey(for control: ControlDescription) -> LocalizedStringKey? {
         guard case .bool(let real)? = control.realValue else { return nil }
         return "Real value: \(real ? "on" : "off")"
     }
@@ -90,6 +102,11 @@ struct TextDraft: Equatable {
     static func invalidMessage(for kind: ControlKind) -> String {
         kind == .integer ? "Enter a whole number." : "Enter a number."
     }
+
+    /// The hint as SwiftUI shows it, as a localization key.
+    static func invalidMessageKey(for kind: ControlKind) -> LocalizedStringKey {
+        LocalizedStringKey(invalidMessage(for: kind))
+    }
 }
 
 /// What a date editor shows and which date its Set button picks.
@@ -110,6 +127,16 @@ struct DateEditorModel {
     /// Shown in place of the picker when there's no override.
     var placeholder: String {
         control.realValue == nil ? "Not set" : "Using real value"
+    }
+
+    /// The placeholder as SwiftUI shows it, as a localization key.
+    var placeholderKey: LocalizedStringKey {
+        LocalizedStringKey(placeholder)
+    }
+
+    /// The caption as SwiftUI shows it, as a localization key.
+    var realCaptionKey: LocalizedStringKey? {
+        realDate.map { "Real value: \($0.formatted(date: .abbreviated, time: .shortened))" }
     }
 
     /// The caption under the editor, when the control reports a real date.

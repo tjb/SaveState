@@ -137,9 +137,10 @@ final class OverlayUITests: XCTestCase {
         closePanel()
         openPanel()
         scroll(to: "saveState.action.seed")
+        XCTAssertFalse(element("saveState.message").exists, "The action outlasted its timing budget, so this run proves nothing")
         XCTAssertFalse(seed.isEnabled, "Reopening must not allow a second run")
 
-        XCTAssertTrue(element("saveState.message").waitForExistence(timeout: 40))
+        XCTAssertTrue(element("saveState.message").waitForExistence(timeout: 60))
         XCTAssertTrue(seed.isEnabled)
     }
 
