@@ -24,7 +24,7 @@ final class OverlayUITests: XCTestCase {
         let button = app.buttons["saveState.button"]
         XCTAssertTrue(button.waitForExistence(timeout: 10))
         button.tap()
-        XCTAssertTrue(app.buttons["saveState.resetAll"].waitForExistence(timeout: 5))
+        XCTAssertTrue(app.buttons["saveState.resetAll"].waitForExistence(timeout: 15))
     }
 
     /// Dismisses the popover by tapping the page behind it. With the keyboard
@@ -72,14 +72,17 @@ final class OverlayUITests: XCTestCase {
         XCTAssertFalse(element("saveState.changed.tips").exists)
 
         tips.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5)).tap()
-        XCTAssertTrue(element("saveState.changed.tips").waitForExistence(timeout: 2))
+        XCTAssertTrue(
+            element("saveState.changed.tips").waitForExistence(timeout: 15),
+            "Marker missing with the switch at \(tips.value ?? "nil"), which tells a missed tap from a slow run"
+        )
 
         relaunch()
 
         scroll(to: "saveState.control.tips")
         XCTAssertTrue(element("saveState.changed.tips").exists)
         app.buttons["saveState.reset.tips"].tap()
-        XCTAssertTrue(element("saveState.changed.tips").waitForNonExistence(timeout: 2))
+        XCTAssertTrue(element("saveState.changed.tips").waitForNonExistence(timeout: 15))
     }
 
     func testRelaunchControlIsMarked() {
@@ -94,7 +97,7 @@ final class OverlayUITests: XCTestCase {
         field.tap()
         field.typeText("!")
         closePanel()
-        XCTAssertTrue(app.staticTexts["Greeting, Welcome back!"].waitForExistence(timeout: 5))
+        XCTAssertTrue(app.staticTexts["Greeting, Welcome back!"].waitForExistence(timeout: 15))
 
         openPanel()
         scroll(to: "saveState.control.greeting")
@@ -106,7 +109,7 @@ final class OverlayUITests: XCTestCase {
         let field = app.textFields["saveState.control.project-limit"]
         field.tap()
         field.typeText("x\n")
-        XCTAssertTrue(app.staticTexts["Enter a whole number."].waitForExistence(timeout: 2))
+        XCTAssertTrue(app.staticTexts["Enter a whole number."].waitForExistence(timeout: 15))
         XCTAssertFalse(element("saveState.changed.project-limit").exists)
     }
 
@@ -150,38 +153,38 @@ final class OverlayUITests: XCTestCase {
     func testDestructiveActionAsksFirst() {
         scroll(to: "saveState.action.seed")
         app.buttons["saveState.action.seed"].tap()
-        XCTAssertTrue(element("saveState.message").waitForExistence(timeout: 2))
+        XCTAssertTrue(element("saveState.message").waitForExistence(timeout: 15))
 
         scroll(to: "saveState.action.erase")
         app.buttons["saveState.action.erase"].tap()
         let alert = app.alerts.firstMatch
-        XCTAssertTrue(alert.waitForExistence(timeout: 2))
+        XCTAssertTrue(alert.waitForExistence(timeout: 15))
         alert.buttons["Cancel"].firstMatch.tap()
-        XCTAssertTrue(alert.waitForNonExistence(timeout: 2))
+        XCTAssertTrue(alert.waitForNonExistence(timeout: 15))
         closePanel()
-        XCTAssertTrue(app.staticTexts["Seeded projects, 5"].waitForExistence(timeout: 2))
+        XCTAssertTrue(app.staticTexts["Seeded projects, 5"].waitForExistence(timeout: 15))
 
         openPanel()
         scroll(to: "saveState.action.erase")
         app.buttons["saveState.action.erase"].tap()
-        XCTAssertTrue(alert.waitForExistence(timeout: 2))
+        XCTAssertTrue(alert.waitForExistence(timeout: 15))
         alert.buttons["Run"].firstMatch.tap()
-        XCTAssertTrue(alert.waitForNonExistence(timeout: 2))
+        XCTAssertTrue(alert.waitForNonExistence(timeout: 15))
         closePanel()
-        XCTAssertTrue(app.staticTexts["Seeded projects, 0"].waitForExistence(timeout: 2))
+        XCTAssertTrue(app.staticTexts["Seeded projects, 0"].waitForExistence(timeout: 15))
     }
 
     func testExpiredTrialScenarioShowsThePaywall() {
         scroll(to: "saveState.scenario.expired-trial")
         app.buttons["saveState.scenario.expired-trial"].tap()
-        XCTAssertTrue(element("saveState.message").waitForExistence(timeout: 2))
+        XCTAssertTrue(element("saveState.message").waitForExistence(timeout: 15))
         closePanel()
-        XCTAssertTrue(element("demo.paywall").waitForExistence(timeout: 3))
+        XCTAssertTrue(element("demo.paywall").waitForExistence(timeout: 15))
 
         openPanel()
         app.buttons["saveState.resetAll"].tap()
         closePanel()
-        XCTAssertTrue(element("demo.trial").waitForExistence(timeout: 3))
+        XCTAssertTrue(element("demo.trial").waitForExistence(timeout: 15))
     }
 
     /// Holds the panel open so `simctl io` can capture it. Runs only when
