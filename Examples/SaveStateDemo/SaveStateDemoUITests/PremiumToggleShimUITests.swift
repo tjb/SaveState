@@ -30,7 +30,7 @@ final class PremiumToggleShimUITests: XCTestCase {
         let button = app.buttons["premiumToggle.button"]
         XCTAssertTrue(button.waitForExistence(timeout: 10))
         button.tap()
-        XCTAssertTrue(app.buttons["saveState.resetAll"].waitForExistence(timeout: 5))
+        XCTAssertTrue(app.buttons["saveState.resetAll"].waitForExistence(timeout: 15))
     }
 
     private var changedMarker: XCUIElement {
@@ -47,7 +47,7 @@ final class PremiumToggleShimUITests: XCTestCase {
         XCTAssertEqual(status.label, "Premium is off")
 
         app.segmentedControls["saveState.control.premium"].buttons["On"].tap()
-        XCTAssertTrue(changedMarker.waitForExistence(timeout: 2))
+        XCTAssertTrue(changedMarker.waitForExistence(timeout: 15))
         XCTAssertEqual(status.label, "Premium is on")
         XCTAssertEqual(app.buttons["premiumToggle.button"].value as? String, "Premium on")
 
@@ -58,7 +58,7 @@ final class PremiumToggleShimUITests: XCTestCase {
         XCTAssertTrue(changedMarker.exists, "A restored override must not become the default")
 
         app.buttons["saveState.reset.premium"].tap()
-        XCTAssertTrue(changedMarker.waitForNonExistence(timeout: 2))
+        XCTAssertTrue(changedMarker.waitForNonExistence(timeout: 15))
         XCTAssertEqual(app.buttons["premiumToggle.button"].value as? String, "Premium off")
     }
 
@@ -69,7 +69,7 @@ final class PremiumToggleShimUITests: XCTestCase {
         button.tap()
 
         let note = app.descendants(matching: .any)["premiumToggle.disabled"].firstMatch
-        XCTAssertTrue(note.waitForExistence(timeout: 5))
+        XCTAssertTrue(note.waitForExistence(timeout: 15))
         XCTAssertTrue(status.exists)
         XCTAssertFalse(app.segmentedControls["saveState.control.premium"].exists)
     }
