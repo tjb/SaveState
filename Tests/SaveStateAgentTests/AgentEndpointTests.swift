@@ -148,6 +148,18 @@ private actor Gate {
     }
 }
 
+/// Whether the port stops accepting connections. A listener closes asynchronously after
+/// `cancel()`, so it can still accept one for a moment after `stop()` returns.
+private func refusesConnections(port: UInt16, within limit: Duration = .seconds(3)) async -> Bool {
+    let clock = ContinuousClock()
+    let deadline = clock.now + limit
+    while clock.now < deadline {
+        if !canConnect(host: "127.0.0.1", port: port) { return true }
+        try? await Task.sleep(for: .milliseconds(25))
+    }
+    return false
+}
+
 /// Whether a plain TCP connection to the address succeeds, with no server-side
 /// behavior involved beyond accepting it.
 private func canConnect(host: String, port: UInt16) -> Bool {
@@ -324,7 +336,7 @@ struct AgentEndpointTests {
         endpoint.stop()
 
         #expect(!FileManager.default.fileExists(atPath: url.path))
-        #expect(!canConnect(host: "127.0.0.1", port: port))
+        #expect(await refusesConnections(port: port))
     }
 
     @Test func stoppingAReplacedEndpointLeavesTheNewOnesFile() async throws {
@@ -337,7 +349,7 @@ struct AgentEndpointTests {
 
         #expect(FileManager.default.fileExists(atPath: url.path))
         #expect(canConnect(host: "127.0.0.1", port: second.info.port))
-        #expect(!canConnect(host: "127.0.0.1", port: first.info.port))
+        #expect(await refusesConnections(port: first.info.port))
     }
 
     @Test func overlappingStartsLeaveOneEndpoint() async throws {
@@ -351,9 +363,11 @@ struct AgentEndpointTests {
 
         let url = container.appendingPathComponent(EndpointInfo.relativePath)
         let info = try JSONDecoder().decode(EndpointInfo.self, from: Data(contentsOf: url))
-        let open = endpoints.filter { canConnect(host: "127.0.0.1", port: $0.info.port) }
-        #expect(open.count == 1)
-        #expect(open.first?.info == info)
+        let survivor = try #require(endpoints.first { $0.info == info })
+        #expect(canConnect(host: "127.0.0.1", port: survivor.info.port))
+        for endpoint in endpoints where endpoint !== survivor {
+            #expect(await refusesConnections(port: endpoint.info.port))
+        }
     }
 
     @Test func startingWithADisabledRegistryStopsTheRunningEndpoint() async throws {
@@ -366,7 +380,7 @@ struct AgentEndpointTests {
         )
 
         #expect(replacement == nil)
-        #expect(!canConnect(host: "127.0.0.1", port: port))
+        #expect(await refusesConnections(port: port))
     }
 
     @Test func aMacWithNoContainerDoesNotStart() async throws {
