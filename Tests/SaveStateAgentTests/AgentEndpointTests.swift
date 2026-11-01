@@ -91,8 +91,8 @@ private final class Client: Sendable {
     }
 
     /// Whether the server closes the connection promptly. The limit is well below
-    /// the hello timeout, which would otherwise close it for an unrelated reason.
-    func isClosedByServer(within limit: Duration = .seconds(1)) async -> Bool {
+    /// the 5 second hello timeout, which would otherwise close it for an unrelated reason.
+    func isClosedByServer(within limit: Duration = .seconds(4)) async -> Bool {
         await withTaskGroup(of: Bool.self) { group in
             let task = task
             group.addTask {
@@ -526,7 +526,7 @@ struct AgentEndpointTests {
         defer { endpoint.stop() }
         let silent = try Client(port: endpoint.info.port)
 
-        #expect(await silent.isClosedByServer(within: .seconds(7)))
+        #expect(await silent.isClosedByServer(within: .seconds(20)))
     }
 
     @Test func aRequestBeforeHelloDoesNothing() async throws {

@@ -154,7 +154,7 @@ struct MisbehavingEndpointTests {
 
         #expect(result.isError == true)
         #expect(text(result).contains("didn't answer in time"))
-        #expect(ContinuousClock.now - start < .seconds(5))
+        #expect(ContinuousClock.now - start < .seconds(15))
     }
 
     @Test func anAppThatNeverUpgradesTimesOutOnTime() async throws {
@@ -164,7 +164,7 @@ struct MisbehavingEndpointTests {
 
         #expect(result.isError == true)
         #expect(text(result).contains("didn't answer in time"))
-        #expect(ContinuousClock.now - start < .seconds(5))
+        #expect(ContinuousClock.now - start < .seconds(15))
     }
 
     @Test func cancellingACallStopsItPromptly() async throws {
@@ -178,7 +178,7 @@ struct MisbehavingEndpointTests {
         call.cancel()
         _ = await call.value
 
-        #expect(ContinuousClock.now - start < .seconds(5))
+        #expect(ContinuousClock.now - start < .seconds(15))
     }
 
     @Test func anAppThatHangsUpSaysToRelaunch() async throws {

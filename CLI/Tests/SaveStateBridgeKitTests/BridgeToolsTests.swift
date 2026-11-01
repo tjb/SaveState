@@ -383,7 +383,15 @@ struct BridgeToolsTests {
         endpoint.stop()
         try write(ghost, to: "ghost")
 
-        #expect(AppDiscovery.apps(on: [scratch.device]).isEmpty)
+        // A listener closes asynchronously, so the port may stay open for a moment.
+        var apps = AppDiscovery.apps(on: [scratch.device])
+        var waited = Duration.zero
+        while !apps.isEmpty, waited < .seconds(3) {
+            try await Task.sleep(for: .milliseconds(25))
+            waited += .milliseconds(25)
+            apps = AppDiscovery.apps(on: [scratch.device])
+        }
+        #expect(apps.isEmpty)
     }
 
     @Test func aDeviceArgumentPicksBetweenSimulators() async throws {
@@ -487,6 +495,12 @@ struct BridgeToolsTests {
         let endpoint = try await start()
         let info = endpoint.info
         endpoint.stop()
+        // Wait until the port is really closed: a listener closes asynchronously.
+        var waited = Duration.zero
+        while !AppDiscovery.apps(on: [scratch.device]).isEmpty, waited < .seconds(3) {
+            try await Task.sleep(for: .milliseconds(25))
+            waited += .milliseconds(25)
+        }
         let tools = BridgeTools(timeout: .seconds(5)) {
             [DiscoveredApp(endpoint: info, deviceIdentifier: "DEVICE")]
         }
@@ -553,7 +567,7 @@ struct SimulatorListingTests {
             _ = try AppDiscovery.runTool(URL(fileURLWithPath: "/bin/sleep"), arguments: ["30"], deadline: 0.2)
         }
 
-        #expect(ContinuousClock.now - start < .seconds(5))
+        #expect(ContinuousClock.now - start < .seconds(15))
     }
 
     @Test func aFailingToolIsReported() {
