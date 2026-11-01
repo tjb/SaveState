@@ -40,7 +40,7 @@ class Server:
         self.next_id += 1
         self._send({"jsonrpc": "2.0", "id": self.next_id, "method": method, "params": params})
         while True:
-            message = json.loads(self.lines.get(timeout=40))
+            message = json.loads(self.lines.get(timeout=120))
             if message.get("id") == self.next_id:
                 if "error" in message:
                     raise SystemExit(f"{method} failed: {message['error']}")
@@ -106,8 +106,13 @@ def main():
         tools,
     )
 
-    failed, text = server.call("savestate_list_apps")
-    apps = json.loads(text) if not failed else []
+    # A simulator that just booted can be slow to answer, and the app slow to listen.
+    for _ in range(30):
+        failed, text = server.call("savestate_list_apps")
+        apps = json.loads(text) if not failed else []
+        if any(a["bundleIdentifier"] == BUNDLE and a["device"] == udid for a in apps):
+            break
+        time.sleep(3)
     expect(any(a["bundleIdentifier"] == BUNDLE and a["device"] == udid for a in apps), "it finds the demo", text)
     expect("token" not in text, "the listing leaves out the token", text)
 
