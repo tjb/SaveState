@@ -11,6 +11,7 @@ final class OverlayUITests: XCTestCase {
     override func setUp() async throws {
         continueAfterFailure = false
         app = XCUIApplication()
+        app.launchArguments = ["-saveStateSlowAction"]
         app.launch()
         openPanel()
         let resetAll = app.buttons["saveState.resetAll"]
