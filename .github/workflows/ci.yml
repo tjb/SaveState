@@ -111,8 +111,10 @@ jobs:
       - uses: actions/checkout@v5
       - run: xcodebuild -version
       - name: Test the demo in the simulator
-        # A failed UI test gets one retry, because simulators on these runners are slow.
-        # That can hide a real intermittent bug, so read "failed" lines in passing runs.
+        # These flags ask for one retry of a failed UI test, but on this runner the test
+        # runner has restarted after a failure and not retried the test, so a failure
+        # may still fail the job. A retry that does fire can hide a real intermittent
+        # bug, so read "failed" lines in passing runs.
         run: |
           udid="$(xcrun simctl list devices available -j | python3 -c "
           import json, sys

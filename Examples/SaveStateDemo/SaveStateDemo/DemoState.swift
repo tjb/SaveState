@@ -50,8 +50,13 @@ final class DemoState {
             r.action("Seed projects", key: "seed") {
                 state.seededProjects += 5
             }
-            r.action("Sync slowly", key: "slow-sync") {
-                try await Task.sleep(for: .seconds(45))
+            // For UI tests only, since it disables the panel's buttons while it runs. It's
+            // far longer than any test takes, and the next launch ends it, so tests can't
+            // race it finishing.
+            if ProcessInfo.processInfo.arguments.contains("-saveStateSlowAction") {
+                r.action("Sync slowly", key: "slow-sync") {
+                    try await Task.sleep(for: .seconds(600))
+                }
             }
             r.action("Erase projects", key: "erase", destructive: true) {
                 state.seededProjects = 0
