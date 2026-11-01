@@ -111,9 +111,10 @@ jobs:
       - uses: actions/checkout@v5
       - run: xcodebuild -version
       - name: Test the demo in the simulator
-        # xcodebuild's own retry flags haven't fired on this runner, so failed tests
-        # get one rerun from a script. A test that only passes on the rerun leaves a
-        # warning on the run, because it can be a real intermittent bug.
+        # Failed tests get one rerun from a script, because xcodebuild's own retry
+        # restarts the test runner instead of retrying when a test has an async setUp
+        # and stops at its first failure. A test that only passes on the rerun leaves
+        # a warning on the run, because it can be a real intermittent bug.
         run: |
           udid="$(xcrun simctl list devices available -j | python3 -c "
           import json, sys
@@ -128,11 +129,19 @@ jobs:
             -derivedDataPath "$RUNNER_TEMP/demo"
           )
           xcodebuild test "${args[@]}" 2>&1 | tee demo.log; status=${PIPESTATUS[0]}
+          grep -h 'savestate-missed-tap:' demo.log | sed 's/^/::warning::/' || true
           if [[ "$status" != 0 ]]; then
             bash "$GITHUB_WORKSPACE/.github/scripts/annotate-errors.sh" demo.log
             bash .github/scripts/rerun-failed-ui-tests.sh demo.log SaveStateDemoUITests "${args[@]}"
           fi
           echo "udid=$udid" >> "$GITHUB_ENV"
+      - name: Keep the test results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: demo-test-results
+          path: ${{ runner.temp }}/demo/Logs/Test/*.xcresult
+          retention-days: 7
       - name: Drive the demo through the MCP server
         run: |
           (cd CLI && swift build)

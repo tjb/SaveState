@@ -1,0 +1,53 @@
+name: Flake hunt
+
+# Repeats the UI tests that have missed taps on fresh runners, to collect evidence.
+# Run it by hand from the Actions tab or with `gh workflow run flake-hunt.yml`.
+
+on:
+  workflow_dispatch:
+    inputs:
+      iterations:
+        description: Times each test runs on each runner
+        default: "10"
+
+permissions:
+  contents: read
+
+jobs:
+  hunt:
+    name: Hunt (${{ matrix.runner }})
+    runs-on: macos-26
+    timeout-minutes: 60
+    strategy:
+      fail-fast: false
+      matrix:
+        runner: [1, 2, 3, 4]
+    steps:
+      - uses: actions/checkout@v5
+      - name: Repeat the tests
+        run: |
+          udid="$(xcrun simctl list devices available -j | python3 -c "
+          import json, sys
+          runtimes = json.load(sys.stdin)['devices']
+          ios = sorted((k for k in runtimes if 'iOS' in k), reverse=True)
+          print(next(d['udid'] for k in ios for d in runtimes[k] if d['name'].startswith('iPhone')))
+          ")"
+          xcodebuild test \
+            -project Examples/SaveStateDemo/SaveStateDemo.xcodeproj \
+            -scheme SaveStateDemo \
+            -destination "id=$udid" \
+            -derivedDataPath "$RUNNER_TEMP/demo" \
+            -test-iterations "${{ inputs.iterations }}" \
+            -only-testing:SaveStateDemoUITests/OverlayUITests/testOverlayChangesPersistAcrossRelaunchUntilReset \
+            -only-testing:SaveStateDemoUITests/OverlayUITests/testResetAllDiscardsAnUnappliedDraft \
+            2>&1 | tee demo.log; status=${PIPESTATUS[0]}
+          echo "Tap misses: $(grep -c 'savestate-missed-tap:' demo.log)"
+          grep -h 'savestate-missed-tap:' demo.log | sed 's/^/::warning::/' || true
+          exit "$status"
+      - name: Keep the test results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: hunt-results-${{ matrix.runner }}
+          path: ${{ runner.temp }}/demo/Logs/Test/*.xcresult
+          retention-days: 7
