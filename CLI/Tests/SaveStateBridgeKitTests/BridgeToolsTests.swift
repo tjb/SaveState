@@ -268,8 +268,11 @@ struct BridgeToolsTests {
 
         #expect(await call("savestate_describe").isError != true)
 
+        // Discovery's port check opens a connection that never says hello, which the
+        // endpoint drops at its 5 second hello timeout. A connection the call itself
+        // left open has said hello, so it would outlast this wait.
         var waited = Duration.zero
-        while endpoint.connectionCount > 0, waited < .seconds(3) {
+        while endpoint.connectionCount > 0, waited < .seconds(8) {
             try await Task.sleep(for: .milliseconds(50))
             waited += .milliseconds(50)
         }
