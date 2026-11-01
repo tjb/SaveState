@@ -42,11 +42,13 @@ public enum AppDiscovery {
     }
 
     /// Runs a tool and returns its output, stopping it at the deadline so a wedged
-    /// CoreSimulatorService can't hang every tool call.
+    /// CoreSimulatorService can't hang every tool call. `simctl` can take well over 15
+    /// seconds right after a simulator boots, and MCP clients commonly give up at 60,
+    /// so the default leaves room for the first and answers inside the second.
     static func runTool(
         _ executable: URL,
         arguments: [String],
-        deadline: TimeInterval = 15
+        deadline: TimeInterval = 40
     ) throws -> Data {
         let process = Process()
         process.executableURL = executable

@@ -13,6 +13,9 @@ import threading
 import time
 
 BUNDLE = "dev.tjb.SaveStateDemo"
+# Long enough for a slow boot, and short enough to report a hung simulator rather than
+# run into the job's timeout.
+RETRY_SECONDS = 300
 
 
 class Server:
@@ -40,7 +43,7 @@ class Server:
         self.next_id += 1
         self._send({"jsonrpc": "2.0", "id": self.next_id, "method": method, "params": params})
         while True:
-            message = json.loads(self.lines.get(timeout=40))
+            message = json.loads(self.lines.get(timeout=120))
             if message.get("id") == self.next_id:
                 if "error" in message:
                     raise SystemExit(f"{method} failed: {message['error']}")
@@ -70,10 +73,12 @@ def relaunch(server, udid):
     """Relaunches the demo and waits for its new endpoint to answer."""
     subprocess.run(["xcrun", "simctl", "terminate", udid, BUNDLE], check=True)
     subprocess.run(["xcrun", "simctl", "launch", udid, BUNDLE], check=True, stdout=subprocess.DEVNULL)
-    for _ in range(40):
-        failed, _text = server.call("savestate_describe", app=BUNDLE)
+    deadline = time.monotonic() + RETRY_SECONDS
+    while time.monotonic() < deadline:
+        failed, text = server.call("savestate_describe", app=BUNDLE)
         if not failed:
             return
+        print(f"retrying: the demo isn't back yet: {text}")
         time.sleep(0.5)
     raise SystemExit("FAILED: the demo didn't come back after a relaunch")
 
@@ -106,8 +111,17 @@ def main():
         tools,
     )
 
-    failed, text = server.call("savestate_list_apps")
-    apps = json.loads(text) if not failed else []
+    # A simulator that just booted can be slow to answer, and the app slow to listen.
+    deadline = time.monotonic() + RETRY_SECONDS
+    while True:
+        failed, text = server.call("savestate_list_apps")
+        apps = json.loads(text) if not failed else []
+        if any(a["bundleIdentifier"] == BUNDLE and a["device"] == udid for a in apps):
+            break
+        print(f"retrying: the demo isn't listed yet: {text}")
+        if time.monotonic() > deadline:
+            break
+        time.sleep(3)
     expect(any(a["bundleIdentifier"] == BUNDLE and a["device"] == udid for a in apps), "it finds the demo", text)
     expect("token" not in text, "the listing leaves out the token", text)
 
