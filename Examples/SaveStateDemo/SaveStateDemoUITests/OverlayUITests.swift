@@ -61,9 +61,28 @@ final class OverlayUITests: XCTestCase {
         let end = app.coordinate(withNormalizedOffset: CGVector(dx: 0.22, dy: 0.0))
             .withOffset(CGVector(dx: 0, dy: top + 80))
         for _ in 0..<8 where !isVisible() {
-            start.press(forDuration: 0.05, thenDragTo: end)
+            // Holding at the end stops the scroll. A tap on a view that's still
+            // moving only stops it, and doesn't reach the control under the finger.
+            start.press(forDuration: 0.05, thenDragTo: end, withVelocity: .default, thenHoldForDuration: 0.3)
         }
         XCTAssertTrue(isVisible(), "\(identifier) isn't reachable")
+    }
+
+    /// Taps a switch until its value changes. A tap can miss on a slow runner, so
+    /// it tries again, but only while the value hasn't changed, and a switch that
+    /// never responds still fails.
+    private func toggle(_ control: XCUIElement) {
+        let before = control.value as? String ?? ""
+        for _ in 0..<3 {
+            control.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5)).tap()
+            // An expectation can only be waited on once, so each try needs its own.
+            let changed = XCTNSPredicateExpectation(
+                predicate: NSPredicate(format: "value != %@", before),
+                object: control
+            )
+            if XCTWaiter.wait(for: [changed], timeout: 5) == .completed { return }
+        }
+        XCTFail("\(control.identifier) stayed at \(before) after three taps")
     }
 
     func testOverlayChangesPersistAcrossRelaunchUntilReset() {
@@ -71,11 +90,8 @@ final class OverlayUITests: XCTestCase {
         scroll(to: "saveState.control.tips")
         XCTAssertFalse(element("saveState.changed.tips").exists)
 
-        tips.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5)).tap()
-        XCTAssertTrue(
-            element("saveState.changed.tips").waitForExistence(timeout: 15),
-            "Marker missing with the switch at \(tips.value ?? "nil"), which tells a missed tap from a slow run"
-        )
+        toggle(tips)
+        XCTAssertTrue(element("saveState.changed.tips").waitForExistence(timeout: 15))
 
         relaunch()
 
@@ -115,16 +131,13 @@ final class OverlayUITests: XCTestCase {
 
     func testResetAllDiscardsAnUnappliedDraft() {
         scroll(to: "saveState.control.tips")
-        let tips = app.switches["saveState.control.tips"]
-        tips.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5)).tap()
+        toggle(app.switches["saveState.control.tips"])
         scroll(to: "saveState.control.greeting")
         let field = app.textFields["saveState.control.greeting"]
         field.tap()
         field.typeText("!")
         app.buttons["saveState.resetAll"].tap()
         closePanel()
-        // This failed once on a CI runner and hasn't reproduced locally. The message
-        // tells a stale draft (a real race with committing on focus loss) from a slow run.
         let greeting = app.staticTexts.matching(NSPredicate(format: "label BEGINSWITH 'Greeting,'")).firstMatch
         XCTAssertTrue(greeting.waitForExistence(timeout: 15), "The greeting row never appeared")
         XCTAssertEqual(greeting.label, "Greeting, Welcome back")
