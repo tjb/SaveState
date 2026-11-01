@@ -9,8 +9,8 @@ and named **scenarios** that set many of them at once, such as `expired-trial` o
 `power-user`. SaveState renders that registry as a debug overlay for people and
 serves it over MCP for agents, in Debug builds only.
 
-> **Status:** pre-alpha. The registry, clock, overlay, simulator endpoint, and MCP
-> tools are in place for v0.1. APIs will change.
+> **Status:** pre-alpha, with no tagged release yet. The registry, clock, overlay,
+> simulator endpoint, and MCP tools are in place for v0.1. APIs will change.
 
 ## Why
 
@@ -18,6 +18,26 @@ Coding agents can now build, launch, and tap through an iOS app, but they still
 can't put it into a specific state without walking the UI there, and some states,
 like a trial that expired yesterday, can't be reached through the UI at all.
 SaveState gives every state a name and a reproducible path.
+
+## Installation
+
+Add the package in Xcode (File > Add Package Dependencies), or in `Package.swift`.
+There's no tagged release yet, so pin to a branch for now:
+
+```swift
+.package(url: "https://github.com/tjb/SaveState", branch: "main")
+```
+
+Then add the products your app target uses:
+
+```swift
+.product(name: "SaveState", package: "SaveState"),
+.product(name: "SaveStateUI", package: "SaveState"),
+.product(name: "SaveStateAgent", package: "SaveState")
+```
+
+`SaveState` is the registry, `SaveStateUI` is the overlay, and `SaveStateAgent` is
+the endpoint coding agents connect to. The package has no third-party dependencies.
 
 ## Declaring state
 
@@ -93,11 +113,13 @@ Task { try? await AgentEndpoint.start(registry: registry) }
 ```
 
 It runs in the simulator, on the loopback interface, and each connection must
-present a token that's new at each launch. Nothing listens on a physical device.
+present a token that's new at each launch. Nothing listens on a physical device,
+so agents can only reach apps running in the simulator.
 
 ### Connecting an agent
 
-Build the bridge, then add `savestate mcp` to your agent as a stdio MCP server:
+Clone this repository and build the bridge, then add `savestate mcp` to your agent
+as a stdio MCP server. Run this from the repository's root:
 
 ```bash
 (cd CLI && swift build -c release)
@@ -142,6 +164,12 @@ relaunching applies it once. The overlay persists its changes; agents choose.
 
 - iOS 18+ / macOS 15+
 - Swift 6.2+ (Xcode 26+)
+
+## Contributing and security
+
+See [CONTRIBUTING.md](CONTRIBUTING.md) to work on SaveState and
+[CHANGELOG.md](CHANGELOG.md) for what's changed. Report vulnerabilities privately,
+as [SECURITY.md](SECURITY.md) describes.
 
 ## License
 
