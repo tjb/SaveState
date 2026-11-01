@@ -122,6 +122,27 @@ final class OverlayUITests: XCTestCase {
         XCTAssertTrue(app.staticTexts["Greeting, Welcome back"].waitForExistence(timeout: 5))
     }
 
+    func testResetAllIsDisabledWithNothingToReset() {
+        XCTAssertFalse(app.buttons["saveState.resetAll"].isEnabled)
+    }
+
+    func testButtonsStayDisabledDuringARunEvenAfterReopeningThePanel() {
+        scroll(to: "saveState.action.slow-sync")
+        let seed = app.buttons["saveState.action.seed"]
+        XCTAssertTrue(seed.isEnabled)
+
+        app.buttons["saveState.action.slow-sync"].tap()
+        XCTAssertFalse(seed.isEnabled)
+
+        closePanel()
+        openPanel()
+        scroll(to: "saveState.action.seed")
+        XCTAssertFalse(seed.isEnabled, "Reopening must not allow a second run")
+
+        XCTAssertTrue(element("saveState.message").waitForExistence(timeout: 40))
+        XCTAssertTrue(seed.isEnabled)
+    }
+
     func testDestructiveActionAsksFirst() {
         scroll(to: "saveState.action.seed")
         app.buttons["saveState.action.seed"].tap()

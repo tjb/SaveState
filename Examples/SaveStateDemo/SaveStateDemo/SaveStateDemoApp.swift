@@ -18,7 +18,9 @@ struct SaveStateDemoApp: App {
     init() {
         let state = DemoState()
         _state = State(initialValue: state)
-        let registry = DemoState.makeRegistry(for: state)
+        // UI tests pass this to check that a disabled registry shows nothing.
+        let isDisabled = ProcessInfo.processInfo.arguments.contains("-saveStateDisabled")
+        let registry = DemoState.makeRegistry(for: state, isEnabled: !isDisabled)
         _registry = State(initialValue: registry)
         #if DEBUG
         Task { try? await AgentEndpoint.start(registry: registry) }

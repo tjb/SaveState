@@ -218,3 +218,16 @@ private final class MinimalProvider: PremiumStatusProvider {
 
     func setDebugOverride(_ value: Bool?) {}
 }
+
+@Suite("PremiumToggle shim's registry")
+@MainActor
+struct PremiumToggleShimRegistryTests {
+    /// The shim's own `isEnabled` decides visibility, so its registry stays enabled
+    /// in every configuration. This can only fail in a Release test run.
+    @Test func theRegistryIsEnabledInEveryConfiguration() {
+        let storage = PremiumDebugOverride(suiteName: "SaveStateUITests.\(UUID().uuidString)")
+        let manager = SampleManager(storage: storage)
+
+        #expect(PremiumProviderModel.makeRegistry(for: manager).isEnabled)
+    }
+}
