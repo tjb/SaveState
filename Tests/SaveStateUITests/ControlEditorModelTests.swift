@@ -97,6 +97,24 @@ struct TriStateEditorTests {
 
 @Suite("Text draft")
 struct TextDraftTests {
+    @Test func untouchedTextIsNotEdited() {
+        let draft = TextDraft(value: .double(1.0 / 3), locale: Locale(identifier: "en_US"))
+        #expect(!draft.isEdited(comparedTo: .double(1.0 / 3)))
+    }
+
+    @Test func typedTextIsEditedEvenWhenInvalid() {
+        var draft = TextDraft(value: .int(3), locale: Locale(identifier: "en_US"))
+        draft.text = "3x"
+        #expect(draft.isEdited(comparedTo: .int(3)))
+    }
+
+    @Test func discardingLeavesNothingEdited() {
+        var draft = TextDraft(value: .int(3), locale: Locale(identifier: "en_US"))
+        draft.text = "4"
+        draft.discard(showing: .int(3))
+        #expect(!draft.isEdited(comparedTo: .int(3)))
+    }
+
     private let american = Locale(identifier: "en_US")
 
     private func integer(_ value: Int) -> ControlDescription {

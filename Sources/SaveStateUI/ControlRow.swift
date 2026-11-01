@@ -7,6 +7,8 @@ struct ControlRow: View {
     let resetAllCount: Int
     let change: (ControlValue) -> Void
     let reset: () -> Void
+    /// Told whether the editor holds typing that hasn't applied.
+    let noteDraft: (Bool) -> Void
 
     @State private var resetCount = 0
 
@@ -101,6 +103,7 @@ struct ControlRow: View {
                 control: control,
                 resetToken: resetCount + resetAllCount,
                 change: change,
+                noteDraft: noteDraft,
                 identifier: editorIdentifier
             )
         case .date:
@@ -170,6 +173,7 @@ private struct TextEditorField: View {
     /// leaves the value as it was.
     let resetToken: Int
     let change: (ControlValue) -> Void
+    let noteDraft: (Bool) -> Void
     let identifier: String
 
     @State private var draft: TextDraft
@@ -179,11 +183,13 @@ private struct TextEditorField: View {
         control: ControlDescription,
         resetToken: Int,
         change: @escaping (ControlValue) -> Void,
+        noteDraft: @escaping (Bool) -> Void,
         identifier: String
     ) {
         self.control = control
         self.resetToken = resetToken
         self.change = change
+        self.noteDraft = noteDraft
         self.identifier = identifier
         _draft = State(initialValue: TextDraft(value: control.value))
     }
@@ -202,6 +208,9 @@ private struct TextEditorField: View {
                 }
                 .onChange(of: resetToken) {
                     draft.discard(showing: control.value)
+                }
+                .onChange(of: draft.isEdited(comparedTo: control.value)) { _, isEdited in
+                    noteDraft(isEdited)
                 }
                 .onDisappear(perform: applyDraft)
                 .accessibilityIdentifier(identifier)

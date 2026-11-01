@@ -80,13 +80,19 @@ struct TextDraft: Equatable {
         isInvalid = false
     }
 
+    /// Whether the text differs from what the editor shows for a value, so there's
+    /// typing a reset would discard. Invalid text counts.
+    func isEdited(comparedTo value: ControlValue) -> Bool {
+        text != ControlText.text(for: value, locale: locale)
+    }
+
     /// Finishes typing.
     ///
     /// - Returns: The value to write, or `nil` when there's nothing to write
     ///   because the text is unedited or invalid.
     mutating func apply(to control: ControlDescription) -> ControlValue? {
         // Displayed numbers are rounded, so unedited text must not write back.
-        guard text != ControlText.text(for: control.value, locale: locale) else {
+        guard isEdited(comparedTo: control.value) else {
             isInvalid = false
             return nil
         }

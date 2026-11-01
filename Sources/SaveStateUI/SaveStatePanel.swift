@@ -35,7 +35,7 @@ public struct SaveStatePanel: View {
 
     private func panel(_ description: RegistryDescription) -> some View {
         VStack(alignment: .leading, spacing: 12) {
-            header(PanelStatus(description))
+            header(PanelStatus(description, hasEditedDrafts: !session.editedDraftKeys.isEmpty))
             if let message = runState.message {
                 messageLabel(message)
             }
@@ -128,7 +128,8 @@ public struct SaveStatePanel: View {
                         control: control,
                         resetAllCount: session.resetAllCount,
                         change: { model.change($0, of: control) },
-                        reset: { model.reset(control) }
+                        reset: { model.reset(control) },
+                        noteDraft: { model.noteDraft(isEdited: $0, of: control) }
                     )
                 }
             }

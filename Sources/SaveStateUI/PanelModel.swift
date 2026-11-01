@@ -25,6 +25,8 @@ final class PanelRunState {
 final class PanelSession {
     /// Bumped by Reset All, which discards drafts even when no value changes.
     var resetAllCount = 0
+    /// The controls whose editors hold typing that hasn't applied yet.
+    var editedDraftKeys: Set<String> = []
     /// The destructive action waiting for a person to confirm it.
     var actionToConfirm: ActionDescription?
 }
@@ -32,18 +34,24 @@ final class PanelSession {
 /// What the panel's header says about the registry's controls.
 struct PanelStatus: Equatable {
     let changedCount: Int
+    /// Whether an editor holds typing that hasn't applied, which Reset All discards.
+    let hasEditedDrafts: Bool
 
-    init(changedCount: Int) {
+    init(changedCount: Int, hasEditedDrafts: Bool = false) {
         self.changedCount = changedCount
+        self.hasEditedDrafts = hasEditedDrafts
     }
 
-    init(_ description: RegistryDescription) {
-        self.init(changedCount: description.controls.filter(\.isChanged).count)
+    init(_ description: RegistryDescription, hasEditedDrafts: Bool = false) {
+        self.init(
+            changedCount: description.controls.filter(\.isChanged).count,
+            hasEditedDrafts: hasEditedDrafts
+        )
     }
 
     var isAtDefault: Bool { changedCount == 0 }
 
-    var canResetAll: Bool { changedCount != 0 }
+    var canResetAll: Bool { changedCount != 0 || hasEditedDrafts }
 
     var text: String {
         isAtDefault ? "Everything at its default" : accessibilityValue
@@ -102,6 +110,15 @@ struct PanelModel {
 
     func reset(_ control: ControlDescription) {
         perform { try registry.reset(control.key) }
+    }
+
+    /// Records whether a control's editor holds typing that hasn't applied.
+    func noteDraft(isEdited: Bool, of control: ControlDescription) {
+        if isEdited {
+            session.editedDraftKeys.insert(control.key)
+        } else {
+            session.editedDraftKeys.remove(control.key)
+        }
     }
 
     func resetAll() {
