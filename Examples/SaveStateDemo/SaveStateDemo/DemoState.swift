@@ -50,8 +50,10 @@ final class DemoState {
             r.action("Seed projects", key: "seed") {
                 state.seededProjects += 5
             }
+            // Far longer than any UI test takes. The next launch ends it, so tests can't
+            // race it finishing.
             r.action("Sync slowly", key: "slow-sync") {
-                try await Task.sleep(for: .seconds(45))
+                try await Task.sleep(for: .seconds(600))
             }
             r.action("Erase projects", key: "erase", destructive: true) {
                 state.seededProjects = 0

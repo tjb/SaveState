@@ -141,7 +141,6 @@ final class OverlayUITests: XCTestCase {
         closePanel()
         openPanel()
         scroll(to: "saveState.action.seed")
-        XCTAssertFalse(element("saveState.message").exists, "The action outlasted its timing budget, so this run proves nothing")
         XCTAssertFalse(seed.isEnabled, "Reopening must not allow a second run")
         // Unit tests cover the run finishing. Waiting for it here is unreliable: the
         // spinner keeps the app from going idle, so queries time out on slow runners.
