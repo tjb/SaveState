@@ -11,7 +11,7 @@ let package = Package(
         .macOS(.v15)
     ],
     products: [
-        // Registry: controls, actions, probes, scenarios. No networking.
+        // Registry: controls, actions, scenarios. No networking.
         .library(name: "SaveState", targets: ["SaveState"]),
         // The in-app overlay for humans.
         .library(name: "SaveStateUI", targets: ["SaveStateUI"]),
