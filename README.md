@@ -9,6 +9,11 @@ and named **scenarios** that set many of them at once, such as `expired-trial` o
 `power-user`. SaveState renders that registry as a debug overlay for people and
 serves it over MCP for agents, in Debug builds only.
 
+![An agent calls SaveState's MCP tools and the demo app switches to its expired trial state, with no taps.](.github/assets/demo.gif)
+
+The demo app driven by the real `savestate mcp` server. The left side shows each
+tool call with a shortened result.
+
 > **Status:** pre-alpha, with no tagged release yet. The registry, clock, overlay,
 > simulator endpoint, and MCP tools are in place for v0.1. APIs will change.
 
