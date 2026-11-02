@@ -14,8 +14,7 @@ serves it over MCP for agents, in Debug builds only.
 The demo app driven by the real `savestate mcp` server. The left side shows each
 tool call with a shortened result.
 
-> **Status:** pre-alpha, with no tagged release yet. The registry, clock, overlay,
-> simulator endpoint, and MCP tools are in place for v0.1. APIs will change.
+> **Status:** v0.1, an early release. APIs can change before 1.0.
 
 ## Why
 
@@ -26,11 +25,10 @@ SaveState gives every state a name and a reproducible path.
 
 ## Installation
 
-Add the package in Xcode (File > Add Package Dependencies), or in `Package.swift`.
-There's no tagged release yet, so pin to a branch for now:
+Add the package in Xcode (File > Add Package Dependencies), or in `Package.swift`:
 
 ```swift
-.package(url: "https://github.com/tjb/SaveState", branch: "main")
+.package(url: "https://github.com/tjb/SaveState", from: "0.1.0")
 ```
 
 Then add the products your app target uses:
@@ -162,8 +160,8 @@ relaunching applies it once. The overlay persists its changes; agents choose.
 
 - `SaveState`, `SaveStateUI`, `SaveStateAgent`, `SaveStateProtocol`: the
   app-facing Swift package, with no third-party dependencies.
-- `savestate`: a Mac CLI and MCP server for coding agents, in `CLI/`. It will
-  install with `brew install tjb/tap/savestate` once v0.1 ships.
+- `savestate`: a Mac CLI and MCP server for coding agents, in `CLI/`. Install it
+  with `brew install tjb/tap/savestate`.
 
 ## Requirements
 
