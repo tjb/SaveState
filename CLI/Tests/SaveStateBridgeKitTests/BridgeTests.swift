@@ -8,6 +8,20 @@ import Testing
     #expect(Bridge.protocolVersion == WireProtocol.version)
 }
 
+@Test func bridgeVersionMatchesTheNewestChangelogEntry() throws {
+    let root = URL(fileURLWithPath: #filePath)
+        .deletingLastPathComponent() // SaveStateBridgeKitTests
+        .deletingLastPathComponent() // Tests
+        .deletingLastPathComponent() // CLI
+        .deletingLastPathComponent()
+    let changelog = try String(
+        contentsOf: root.appendingPathComponent("CHANGELOG.md"),
+        encoding: .utf8
+    )
+    let newest = changelog.split(separator: "\n").first { $0.hasPrefix("## ") }
+    #expect(newest?.hasPrefix("## \(Bridge.version) ") == true)
+}
+
 private func text(_ content: [Tool.Content]) -> String {
     content.compactMap { item -> String? in
         if case .text(let text, _, _) = item { return text }

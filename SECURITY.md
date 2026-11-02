@@ -9,7 +9,7 @@ replies may take a few days.
 
 ## Supported versions
 
-SaveState has no tagged release yet, so only the `main` branch gets fixes.
+Only the latest release and the `main` branch get fixes.
 
 ## What counts
 

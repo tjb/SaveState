@@ -3,9 +3,9 @@
 Notable changes to SaveState. Versions follow
 [Semantic Versioning](https://semver.org), and APIs can change before 1.0.
 
-## Unreleased
+## 0.1.0 - 2026-11-02
 
-Everything planned for v0.1 so far:
+The first release:
 
 - A registry of controls: Bool, tri-state, enum, string, number, and date.
 - Actions, and named scenarios that are applied live.

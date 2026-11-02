@@ -8,7 +8,7 @@ import SaveStateProtocol
 /// Mac app can link the same logic.
 public enum Bridge {
     /// The bridge version.
-    public static let version = "0.0.0"
+    public static let version = "0.1.0"
 
     /// The wire protocol version the bridge speaks to app endpoints.
     public static let protocolVersion = WireProtocol.version

@@ -1,6 +1,6 @@
 # Contributing
 
-SaveState is pre-alpha and its APIs will change, so please open an issue to discuss
+SaveState is an early release and its APIs can change before 1.0, so please open an issue to discuss
 anything large before you build it. To report a vulnerability, follow
 [SECURITY.md](SECURITY.md) instead of opening an issue.
 
