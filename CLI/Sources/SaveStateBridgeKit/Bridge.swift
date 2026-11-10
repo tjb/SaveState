@@ -16,7 +16,8 @@ public enum Bridge {
     /// Runs an MCP server over stdio until the client disconnects.
     ///
     /// It serves `savestate_list_apps`, `savestate_describe`, `savestate_set`,
-    /// `savestate_run_action`, `savestate_apply_scenario`, and `savestate_read`.
+    /// `savestate_run_action`, `savestate_apply_scenario`, `savestate_read`, and
+    /// `savestate_wait`.
     public static func runMCPServer(tools: BridgeTools = BridgeTools()) async throws {
         try await serve(tools: tools, over: StdioTransport())
     }

@@ -1,6 +1,6 @@
 import SaveStateProtocol
 import Testing
 
-@Test func protocolIsAtVersionTwo() {
-    #expect(WireProtocol.version == 2)
+@Test func protocolIsAtVersionThree() {
+    #expect(WireProtocol.version == 3)
 }
