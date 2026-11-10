@@ -34,8 +34,9 @@ public struct BridgeTools: Sendable {
         Tool(
             name: "savestate_describe",
             description: """
-            Describe an app's debug state: its controls with their current values, its actions, and \
-            its named scenarios. Call this first. Scenarios are the quickest way to reach a state.
+            Describe an app's debug state: its controls with their current values, its actions, its \
+            named scenarios, and its probes, which are read-only state the app reports and which \
+            savestate_wait can wait on. Call this first. Scenarios are the quickest way to reach a state.
             """,
             inputSchema: schema()
         ),
@@ -77,13 +78,47 @@ public struct BridgeTools: Sendable {
         Tool(
             name: "savestate_read",
             description: """
-            Read one control's values: value is its own setting, realValue the real one if it reports \
-            one, and effectiveValue what the app acts on. For the clock, effectiveValue is the app's \
-            current time.
+            Read one control or probe by key. For a control, value is its own setting, realValue the \
+            real one if it reports one, and effectiveValue what the app acts on. For the clock, \
+            effectiveValue is the app's current time. For a probe, value is what the app reports now.
             """,
             inputSchema: schema(
-                properties: ["key": ["type": "string", "description": "The control's key from savestate_describe."]],
+                properties: [
+                    "key": ["type": "string", "description": "The control's or probe's key from savestate_describe."]
+                ],
                 required: ["key"]
+            )
+        ),
+        Tool(
+            name: "savestate_wait",
+            description: """
+            Wait until a probe meets a condition, then return the probe with the value that met it. \
+            Use it after an action or scenario starts work that finishes later. equals and notEquals \
+            take true or false, a number, or a string; atLeast and atMost take a number, or a date-time \
+            with a time zone, such as 2027-01-15T08:00:00Z, for date probes. Fails if the condition \
+            isn't met within timeoutSeconds. Controls can't be waited on; read them with savestate_read.
+            """,
+            inputSchema: schema(
+                properties: [
+                    "key": ["type": "string", "description": "The probe's key from savestate_describe."],
+                    "condition": [
+                        "type": "string",
+                        "enum": .array(WaitArguments.conditionNames.map { .string($0) }),
+                        "description": "How the probe's value compares with value."
+                    ],
+                    "value": [
+                        "type": ["boolean", "number", "string"],
+                        "description": "What to compare with: true or false, a number, a string, or a date-time with a time zone."
+                    ],
+                    "timeoutSeconds": [
+                        "type": "number",
+                        "description": """
+                        How long to wait, in seconds: more than 0 and at most \(WaitArguments.maximumSeconds). \
+                        Defaults to \(WaitArguments.defaultSeconds).
+                        """
+                    ]
+                ],
+                required: ["key", "condition", "value"]
             )
         )
     ]
@@ -134,6 +169,19 @@ public struct BridgeTools: Sendable {
             return "\(error.message) Rebuild the app and the bridge from the same SaveState version."
         case .unauthorized:
             return "\(error.message) The app may have relaunched. Try again."
+        case .unknownProbe:
+            return "\(error.message) Call savestate_describe to see the probes."
+        case .timedOut:
+            return """
+            \(error.message) Check the probe's current value with savestate_read, or retry with a longer \
+            timeoutSeconds, at most \(WaitArguments.maximumSeconds).
+            """
+        case .invalidCondition:
+            return """
+            \(error.message) equals and notEquals compare any value of the same type. atLeast and atMost \
+            apply only to numbers and dates, and a date compares with a date-time string such as \
+            2027-01-15T08:00:00Z.
+            """
         default:
             return error.message
         }
@@ -161,9 +209,9 @@ public struct BridgeTools: Sendable {
         case "savestate_describe":
             return try encode(try await registry(of: try await selectApp(arguments)))
         case "savestate_read":
-            let result = try await send(.read(key: try string("key", in: arguments)), to: try await selectApp(arguments))
-            guard case .control(let control) = result else { throw unexpected(result) }
-            return try encode(control)
+            return try await read(arguments)
+        case "savestate_wait":
+            return try await wait(arguments)
         case "savestate_set":
             return try await set(arguments)
         case "savestate_run_action":
@@ -211,14 +259,59 @@ public struct BridgeTools: Sendable {
         }
     }
 
+    /// Reads a control, or a probe when no control has the key, since the two
+    /// share one key space.
+    private func read(_ arguments: [String: Value]) async throws -> String {
+        let key = try string("key", in: arguments)
+        let app = try await selectApp(arguments)
+        do {
+            let result = try await send(.read(key: key), to: app)
+            guard case .control(let control) = result else { throw unexpected(result) }
+            return try encode(control)
+        } catch let error as WireError where error.code == .unknownControl {
+            do {
+                let result = try await send(.readProbe(key: key), to: app)
+                guard case .probe(let probe) = result else { throw unexpected(result) }
+                return try encode(probe)
+            } catch let error as WireError where error.code == .unknownProbe {
+                throw BridgeError("""
+                No control or probe has the key "\(key)". Call savestate_describe to see the keys.
+                """)
+            }
+        }
+    }
+
+    private func wait(_ arguments: [String: Value]) async throws -> String {
+        let key = try string("key", in: arguments)
+        let wait = try WaitArguments(arguments)
+        let app = try await selectApp(arguments)
+        let result: WireResult
+        do {
+            // The app answers when the wait ends, so the bridge has to outlast it.
+            result = try await send(
+                .wait(key: key, condition: wait.condition, timeoutMilliseconds: wait.milliseconds),
+                to: app,
+                timeout: max(timeout, .milliseconds(wait.milliseconds) + WaitArguments.slack)
+            )
+        } catch let error as WireError where error.code == .unknownProbe {
+            // Waiting on a control is a likely mistake, so say so rather than that the key is missing.
+            guard case .control? = try? await send(.read(key: key), to: app) else { throw error }
+            throw BridgeError("""
+            "\(key)" is a control, not a probe. savestate_wait waits only on probes; read a control with savestate_read.
+            """)
+        }
+        guard case .probe(let probe) = result else { throw unexpected(result) }
+        return try encode(probe)
+    }
+
     private func registry(of app: DiscoveredApp) async throws -> RegistryDescription {
         let result = try await send(.describe, to: app)
         guard case .description(let description) = result else { throw unexpected(result) }
         return description
     }
 
-    private func send(_ request: WireRequest, to app: DiscoveredApp) async throws -> WireResult {
-        let result = try await AppClient.send(request, to: app, timeout: timeout)
+    private func send(_ request: WireRequest, to app: DiscoveredApp, timeout: Duration? = nil) async throws -> WireResult {
+        let result = try await AppClient.send(request, to: app, timeout: timeout ?? self.timeout)
         if case .failure(let error) = result { throw error }
         return result
     }
@@ -333,11 +426,7 @@ enum ControlValueConversion {
         case (.string(let text), .date), (.string(let text), .clock):
             return ControlValue(iso8601Date: text)
         case (.data, .text), (.data, .choice):
-            // The SDK decodes any string shaped like a data URL as data, so an agent
-            // can send one without meaning binary. Its own encoding restores the text.
-            return (try? JSONEncoder().encode(json))
-                .flatMap { try? JSONDecoder().decode(String.self, from: $0) }
-                .map(ControlValue.string)
+            return restoredText(json).map(ControlValue.string)
         case (.string(let text), _):
             return .string(text)
         case (.int(let number), .decimal):
@@ -352,6 +441,37 @@ enum ControlValueConversion {
         default:
             return nil
         }
+    }
+
+    /// Converts the value a `savestate_wait` condition compares with. Unlike a
+    /// control's value, it has no kind to check against: the app checks it.
+    static func probeValue(from json: Value) throws -> ControlValue {
+        switch json {
+        case .bool(let flag):
+            return .bool(flag)
+        case .int(let number):
+            return .int(number)
+        case .double(let number):
+            return .double(number)
+        case .string(let text):
+            return .string(text)
+        case .data:
+            if let text = restoredText(json) {
+                return .string(text)
+            }
+        case .null, .array, .object:
+            break
+        }
+        throw BridgeError("""
+        value can't be \(describe(json)). It takes true or false, a number, a string, or a date-time with \
+        a time zone, such as 2027-01-15T08:00:00Z.
+        """)
+    }
+
+    /// The SDK decodes any string shaped like a data URL as data, so an agent can
+    /// send one without meaning binary. Its own encoding restores the text.
+    private static func restoredText(_ json: Value) -> String? {
+        (try? JSONEncoder().encode(json)).flatMap { try? JSONDecoder().decode(String.self, from: $0) }
     }
 
     private static func article(for kind: ControlKind) -> String {
@@ -395,5 +515,63 @@ enum ControlValueConversion {
         case .array: return "an array"
         case .object: return "an object"
         }
+    }
+}
+
+/// The checked arguments of a `savestate_wait` call, other than the key and app.
+struct WaitArguments {
+    /// The conditions an agent can name, as the schema lists them.
+    static let conditionNames = ["equals", "notEquals", "atLeast", "atMost"]
+    /// The timeout when the agent doesn't pass one.
+    static let defaultSeconds = 10
+    /// The longest timeout the app accepts.
+    static let maximumSeconds = 30
+    /// How much longer than the wait the bridge waits for the app's answer.
+    static let slack: Duration = .seconds(5)
+
+    /// What to wait for.
+    var condition: ProbeCondition
+    /// The timeout to send the app.
+    var milliseconds: Int
+
+    init(_ arguments: [String: Value]) throws {
+        guard let name = arguments["condition"] else {
+            throw BridgeError("savestate_wait needs a condition: \(Self.conditionNames.joined(separator: ", ")).")
+        }
+        guard let json = arguments["value"] else {
+            throw BridgeError("savestate_wait needs a value to compare with.")
+        }
+        let value = try ControlValueConversion.probeValue(from: json)
+        switch name.stringValue {
+        case "equals": condition = .equals(value: value)
+        case "notEquals": condition = .notEquals(value: value)
+        case "atLeast": condition = .atLeast(value: value)
+        case "atMost": condition = .atMost(value: value)
+        default:
+            throw BridgeError("condition must be one of: \(Self.conditionNames.joined(separator: ", ")).")
+        }
+        milliseconds = try Self.milliseconds(arguments["timeoutSeconds"])
+    }
+
+    /// Rejects a timeout out of range rather than clamping it, so an agent never
+    /// waits a different time than it asked for without knowing.
+    private static func milliseconds(_ json: Value?) throws -> Int {
+        let seconds: Double
+        switch json {
+        case nil:
+            seconds = Double(defaultSeconds)
+        case .int(let number)?:
+            seconds = Double(number)
+        case .double(let number)?:
+            seconds = number
+        default:
+            seconds = .nan
+        }
+        guard seconds > 0, seconds <= Double(maximumSeconds) else {
+            throw BridgeError("timeoutSeconds must be a number more than 0 and at most \(maximumSeconds).")
+        }
+        // Rounded to the nearest, since `2.007 * 1000` is a hair over 2007, with a
+        // floor of 1 so a tiny timeout still waits rather than becoming zero.
+        return max(1, Int((seconds * 1000).rounded()))
     }
 }

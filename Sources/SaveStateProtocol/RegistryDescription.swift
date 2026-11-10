@@ -1,5 +1,5 @@
 /// A snapshot of an app's registry: every control with its current values,
-/// every action, and every scenario.
+/// every action, every scenario, and every probe with its current value.
 ///
 /// This is what the `savestate_describe` MCP tool returns to agents.
 public struct RegistryDescription: Codable, Hashable, Sendable {
@@ -9,16 +9,20 @@ public struct RegistryDescription: Codable, Hashable, Sendable {
     public var actions: [ActionDescription]
     /// The scenarios, in declaration order.
     public var scenarios: [ScenarioDescription]
+    /// The probes, in declaration order.
+    public var probes: [ProbeDescription]
 
     /// Creates a snapshot.
     public init(
         controls: [ControlDescription],
         actions: [ActionDescription],
-        scenarios: [ScenarioDescription]
+        scenarios: [ScenarioDescription],
+        probes: [ProbeDescription] = []
     ) {
         self.controls = controls
         self.actions = actions
         self.scenarios = scenarios
+        self.probes = probes
     }
 }
 
@@ -115,5 +119,26 @@ public struct ScenarioDescription: Codable, Hashable, Sendable {
         self.label = label
         self.section = section
         self.summary = summary
+    }
+}
+
+/// One probe and its value at the moment of the snapshot. A probe is read-only
+/// state the app reports, such as a count of pending uploads.
+public struct ProbeDescription: Codable, Hashable, Sendable {
+    /// The stable identifier agents and tests read the probe by.
+    public var key: String
+    /// Display text for people. Never matched on.
+    public var label: String
+    /// The section the probe was declared in, if any.
+    public var section: String?
+    /// The probe's value: `.bool`, `.int`, `.double`, `.string`, or `.date`.
+    public var value: ControlValue
+
+    /// Creates a probe's snapshot.
+    public init(key: String, label: String, section: String?, value: ControlValue) {
+        self.key = key
+        self.label = label
+        self.section = section
+        self.value = value
     }
 }

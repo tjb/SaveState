@@ -106,8 +106,9 @@ def main():
             "savestate_run_action",
             "savestate_apply_scenario",
             "savestate_read",
+            "savestate_wait",
         },
-        "the server advertises the six tools",
+        "the server advertises the seven tools",
         tools,
     )
 

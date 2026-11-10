@@ -42,6 +42,16 @@ private let environmentJSON = #"{"defaultValue":{"type":"string","value":"produc
     + #""realValue":{"type":"string","value":"production"},"requiresRelaunch":true,"#
     + #""section":"Network","value":{"type":"string","value":"staging"}}"#
 
+private let pendingUploads = ProbeDescription(
+    key: "sync.pending-uploads",
+    label: "Pending uploads",
+    section: "Sync",
+    value: .int(3)
+)
+
+private let pendingUploadsJSON = #"{"key":"sync.pending-uploads","label":"Pending uploads","#
+    + #""section":"Sync","value":{"type":"int","value":3}}"#
+
 private let expiredTrial = ScenarioDescription(
     key: "expired-trial",
     label: "Expired trial",
@@ -64,11 +74,16 @@ struct WireFormatTests {
             #"{"set":{"key":"on","persist":true,"value":{"type":"bool","value":true}}}"#
         ),
         (.runAction(key: "seed"), #"{"runAction":{"key":"seed"}}"#),
-        (.applyScenario(key: "expired-trial"), #"{"applyScenario":{"key":"expired-trial"}}"#)
+        (.applyScenario(key: "expired-trial"), #"{"applyScenario":{"key":"expired-trial"}}"#),
+        (.readProbe(key: "synced"), #"{"readProbe":{"key":"synced"}}"#),
+        (
+            .wait(key: "count", condition: .atLeast(value: .int(5)), timeoutMilliseconds: 2_000),
+            #"{"wait":{"condition":{"atLeast":{"value":{"type":"int","value":5}}},"key":"count","timeoutMilliseconds":2000}}"#
+        )
     ])
     func requestsEncodeStably(_ request: WireRequest, expected: String) throws {
         let text = try json(request)
-        let decoded = try roundTrip(request)
+        let decoded = try JSONDecoder().decode(WireRequest.self, from: Data(expected.utf8))
 
         #expect(text == expected)
         #expect(decoded == request)
@@ -84,6 +99,30 @@ struct WireFormatTests {
         let text = try json(WireResult.control(control: premium))
 
         #expect(text == #"{"control":{"control":\#(premiumJSON)}}"#)
+    }
+
+    @Test func probeResultEncodesStably() throws {
+        let text = try json(WireResult.probe(probe: pendingUploads))
+
+        #expect(text == #"{"probe":{"probe":\#(pendingUploadsJSON)}}"#)
+    }
+
+    @Test func probeResultDecodesFromItsPinnedJSON() throws {
+        let data = Data(#"{"probe":{"probe":\#(pendingUploadsJSON)}}"#.utf8)
+
+        #expect(try JSONDecoder().decode(WireResult.self, from: data) == .probe(probe: pendingUploads))
+    }
+
+    @Test func aProbeDecodesFromItsPinnedJSON() throws {
+        let decoded = try JSONDecoder().decode(ProbeDescription.self, from: Data(pendingUploadsJSON.utf8))
+
+        #expect(decoded == pendingUploads)
+    }
+
+    @Test func aProbeWithoutASectionOmitsIt() throws {
+        let probe = ProbeDescription(key: "on", label: "On", section: nil, value: .bool(true))
+
+        #expect(try json(probe) == #"{"key":"on","label":"On","value":{"type":"bool","value":true}}"#)
     }
 
     @Test func aControlWithEveryOptionalFieldEncodesStably() throws {
@@ -112,14 +151,21 @@ struct WireFormatTests {
         let registry = RegistryDescription(
             controls: [premium],
             actions: [ActionDescription(key: "erase", label: "Erase", section: "Data", isDestructive: true)],
-            scenarios: [ScenarioDescription(key: "fresh", label: "Fresh", section: nil, summary: "New user")]
+            scenarios: [ScenarioDescription(key: "fresh", label: "Fresh", section: nil, summary: "New user")],
+            probes: [pendingUploads]
         )
 
         let text = try json(WireResult.description(registry: registry))
 
         #expect(text == #"{"description":{"registry":{"actions":[{"isDestructive":true,"key":"erase","label":"Erase","section":"Data"}],"#
-            + #""controls":[\#(premiumJSON)],"#
+            + #""controls":[\#(premiumJSON)],"probes":[\#(pendingUploadsJSON)],"#
             + #""scenarios":[{"key":"fresh","label":"Fresh","summary":"New user"}]}}}"#)
+    }
+
+    @Test func aDescriptionHasNoProbesByDefault() {
+        let registry = RegistryDescription(controls: [], actions: [], scenarios: [])
+
+        #expect(registry.probes.isEmpty)
     }
 
     @Test func requestEnvelopesEncodeStably() throws {
@@ -194,7 +240,10 @@ struct WireFormatTests {
         (.unknownScenario, "unknownScenario"),
         (.destructiveActionNotAllowed, "destructiveActionNotAllowed"),
         (.invalidValue, "invalidValue"),
-        (.operationFailed, "operationFailed")
+        (.operationFailed, "operationFailed"),
+        (.unknownProbe, "unknownProbe"),
+        (.timedOut, "timedOut"),
+        (.invalidCondition, "invalidCondition")
     ])
     func errorCodesKeepTheirNames(_ code: WireError.Code, name: String) throws {
         let text = try json(WireError(code: code, message: "m"))
@@ -213,7 +262,11 @@ struct MalformedWireMessageTests {
         #"{"set":{"key":"on","value":{"type":"bool","value":true}}}"#,
         #"{"set":{"key":"on","persist":true}}"#,
         #"{"set":{"key":"on","persist":true,"value":{"type":"bool"}}}"#,
-        #"{"read":{"key":"on"},"describe":{}}"#
+        #"{"read":{"key":"on"},"describe":{}}"#,
+        #"{"readProbe":{}}"#,
+        #"{"wait":{"key":"count","condition":{"atLeast":{"value":{"type":"int","value":5}}}}}"#,
+        #"{"wait":{"key":"count","timeoutMilliseconds":2000}}"#,
+        #"{"wait":{"key":"count","condition":{"atLeast":{"value":{"type":"int","value":5}}},"timeoutMilliseconds":1.5}}"#
     ])
     func badRequestsFailToDecode(_ text: String) {
         #expect(throws: DecodingError.self) {
@@ -248,6 +301,23 @@ struct MalformedWireMessageTests {
 
         #expect(throws: DecodingError.self) {
             try JSONDecoder().decode(EndpointInfo.self, from: data)
+        }
+    }
+
+    /// Protocol 3 requires `probes`, so a version 2 description fails loudly.
+    @Test func aDescriptionWithoutProbesFailsToDecode() {
+        let data = Data(#"{"actions":[],"controls":[],"scenarios":[]}"#.utf8)
+
+        #expect(throws: DecodingError.self) {
+            try JSONDecoder().decode(RegistryDescription.self, from: data)
+        }
+    }
+
+    @Test func aProbeMissingItsValueFailsToDecode() {
+        let data = Data(#"{"key":"k","label":"L"}"#.utf8)
+
+        #expect(throws: DecodingError.self) {
+            try JSONDecoder().decode(ProbeDescription.self, from: data)
         }
     }
 

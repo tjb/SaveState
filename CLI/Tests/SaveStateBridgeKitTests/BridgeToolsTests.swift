@@ -25,6 +25,11 @@ private final class Model {
     var ratio = 0.5
     var trialEnd: Date?
     var runs = 0
+    var pending = 0
+    var connected = false
+    var screen = "home"
+    var progress = 0.25
+    var lastSync = Date(timeIntervalSince1970: 1_800_000_000)
 }
 
 /// A fake simulator's data folder, removed when the test ends.
@@ -85,6 +90,11 @@ struct BridgeToolsTests {
             r.action("Erase", key: "erase", destructive: true) { model.runs = 0 }
             r.action("Throw", key: "throw") { throw Boom.failed }
             r.scenario("Expired", key: "expired-trial") { state in state.premium = false }
+            r.probe("Pending uploads", key: "pending") { model.pending }
+            r.probe("Connected", key: "connected") { model.connected }
+            r.probe("Screen", key: "screen") { model.screen }
+            r.probe("Progress", key: "progress") { model.progress }
+            r.probe("Last sync", key: "last-sync") { model.lastSync }
         }
         return try #require(try await AgentEndpoint.start(registry: registry, container: scratch.container()))
     }
@@ -95,14 +105,15 @@ struct BridgeToolsTests {
 
     // MARK: - The tools
 
-    @Test func advertisesTheSixTools() {
+    @Test func advertisesTheSevenTools() {
         #expect(Set(BridgeTools.definitions.map(\.name)) == [
             "savestate_list_apps",
             "savestate_describe",
             "savestate_set",
             "savestate_run_action",
             "savestate_apply_scenario",
-            "savestate_read"
+            "savestate_read",
+            "savestate_wait"
         ])
     }
 
@@ -169,6 +180,166 @@ struct BridgeToolsTests {
         #expect(result.isError != true)
         #expect(text(result).contains("7"))
         #expect(await call("savestate_read", ["key": "nope"]).isError == true)
+    }
+
+    // MARK: - Probes
+
+    @Test func describesProbes() async throws {
+        let endpoint = try await start()
+        defer { endpoint.stop() }
+
+        let result = await call("savestate_describe")
+
+        #expect(text(result).contains("\"probes\""))
+        #expect(text(result).contains("Pending uploads"))
+    }
+
+    @Test func readFallsBackToAProbe() async throws {
+        let endpoint = try await start()
+        defer { endpoint.stop() }
+        model.pending = 4
+
+        let result = await call("savestate_read", ["key": "pending"])
+
+        #expect(result.isError != true, "\(text(result))")
+        #expect(text(result).contains("Pending uploads"))
+        #expect(text(result).contains("\"value\" : 4"), "\(text(result))")
+        // A probe has no realValue or effectiveValue, so this is the probe's encoding.
+        #expect(!text(result).contains("effectiveValue"))
+    }
+
+    @Test func readStillPrefersAControl() async throws {
+        let endpoint = try await start()
+        defer { endpoint.stop() }
+
+        let result = await call("savestate_read", ["key": "count"])
+
+        #expect(text(result).contains("effectiveValue"))
+    }
+
+    @Test func readOfAKeyNeitherHasSaysSo() async throws {
+        let endpoint = try await start()
+        defer { endpoint.stop() }
+
+        let result = await call("savestate_read", ["key": "nope"])
+
+        #expect(result.isError == true)
+        #expect(text(result) == "No control or probe has the key \"nope\". Call savestate_describe to see the keys.")
+    }
+
+    @Test func waitsUntilAProbeEqualsAValue() async throws {
+        let endpoint = try await start()
+        defer { endpoint.stop() }
+        let model = model
+        let change = Task { @MainActor in
+            try await Task.sleep(for: .milliseconds(200))
+            model.connected = true
+        }
+        defer { change.cancel() }
+
+        let result = await call("savestate_wait", ["key": "connected", "condition": "equals", "value": true])
+
+        #expect(result.isError != true, "\(text(result))")
+        #expect(text(result).contains("\"value\" : true"), "\(text(result))")
+        #expect(model.connected)
+    }
+
+    @Test func waitsUntilAProbeDiffers() async throws {
+        let endpoint = try await start()
+        defer { endpoint.stop() }
+
+        let result = await call("savestate_wait", ["key": "screen", "condition": "notEquals", "value": "loading"])
+
+        #expect(result.isError != true, "\(text(result))")
+        #expect(text(result).contains("\"home\""))
+    }
+
+    @Test func waitsUntilANumberIsAtLeast() async throws {
+        let endpoint = try await start()
+        defer { endpoint.stop() }
+        model.pending = 5
+
+        let int = await call("savestate_wait", ["key": "pending", "condition": "atLeast", "value": 3])
+        let double = await call("savestate_wait", ["key": "progress", "condition": "atLeast", "value": 0.25])
+
+        #expect(int.isError != true, "\(text(int))")
+        #expect(text(int).contains("\"value\" : 5"), "\(text(int))")
+        #expect(double.isError != true, "\(text(double))")
+    }
+
+    @Test func waitsUntilADateIsAtMost() async throws {
+        let endpoint = try await start()
+        defer { endpoint.stop() }
+
+        let result = await call(
+            "savestate_wait",
+            ["key": "last-sync", "condition": "atMost", "value": "2030-01-01T00:00:00Z"]
+        )
+
+        #expect(result.isError != true, "\(text(result))")
+        #expect(text(result).contains("Last sync"))
+    }
+
+    @Test func aWaitThatTimesOutSaysWhatToTry() async throws {
+        let endpoint = try await start()
+        defer { endpoint.stop() }
+
+        let result = await call(
+            "savestate_wait",
+            ["key": "pending", "condition": "equals", "value": 99, "timeoutSeconds": 0.2]
+        )
+
+        #expect(result.isError == true)
+        #expect(text(result).contains("didn't meet the condition within 200 ms"), "\(text(result))")
+        #expect(text(result).contains("savestate_read"))
+        #expect(text(result).contains("longer timeoutSeconds"))
+    }
+
+    @Test func aConditionThatCantApplySaysWhichDo() async throws {
+        let endpoint = try await start()
+        defer { endpoint.stop() }
+
+        let result = await call("savestate_wait", ["key": "connected", "condition": "atLeast", "value": true])
+
+        #expect(result.isError == true)
+        #expect(text(result).contains("can't apply"), "\(text(result))")
+        #expect(text(result).contains("atLeast and atMost apply only to numbers and dates"))
+    }
+
+    @Test func aWaitForAnUnknownProbeSaysToDescribe() async throws {
+        let endpoint = try await start()
+        defer { endpoint.stop() }
+
+        let result = await call("savestate_wait", ["key": "nope", "condition": "equals", "value": 0])
+
+        #expect(result.isError == true)
+        #expect(text(result).contains("No probe has the key \"nope\""), "\(text(result))")
+        #expect(text(result).contains("Call savestate_describe"))
+    }
+
+    @Test func aWaitForAControlSaysItIsAControl() async throws {
+        let endpoint = try await start()
+        defer { endpoint.stop() }
+
+        let result = await call("savestate_wait", ["key": "count", "condition": "equals", "value": 0])
+
+        #expect(result.isError == true)
+        #expect(text(result) == """
+        "count" is a control, not a probe. savestate_wait waits only on probes; read a control with savestate_read.
+        """)
+    }
+
+    @Test func aDataURLStringWaitsAsText() async throws {
+        let endpoint = try await start()
+        defer { endpoint.stop() }
+        let url = "data:text/plain;base64,aGk="
+        model.screen = url
+        // Decoded from JSON, because that's where the SDK turns it into data.
+        let value = try JSONDecoder().decode(Value.self, from: JSONEncoder().encode(url))
+
+        let result = await call("savestate_wait", ["key": "screen", "condition": "equals", "value": value])
+
+        #expect(result.isError != true, "\(text(result))")
     }
 
     // MARK: - Setting

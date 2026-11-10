@@ -1,11 +1,13 @@
 import Foundation
 import SaveStateProtocol
 
-/// Declares the controls, actions, and scenarios a `SaveStateRegistry` exposes.
+/// Declares the controls, actions, scenarios, and probes a `SaveStateRegistry`
+/// exposes.
 ///
 /// You receive one in the closure you pass to `SaveStateRegistry.init`. Key
 /// paths point into the model you gave the registry. Keys are stable
-/// identifiers that agents and tests use; labels are display text only.
+/// identifiers that agents and tests use; labels are display text only. Controls
+/// and probes share one set of keys, because an agent reads either by key.
 @MainActor
 public final class RegistryBuilder<Model: AnyObject> {
     private let model: Model
@@ -13,6 +15,7 @@ public final class RegistryBuilder<Model: AnyObject> {
     private(set) var controls: [Control] = []
     private(set) var actions: [RegisteredAction] = []
     private(set) var scenarios: [RegisteredScenario] = []
+    private(set) var probes: [RegisteredProbe] = []
 
     init(model: Model) {
         self.model = model
@@ -20,7 +23,7 @@ public final class RegistryBuilder<Model: AnyObject> {
 
     // MARK: - Sections
 
-    /// Groups the controls, actions, and scenarios declared in `content` under
+    /// Groups the controls, actions, scenarios, and probes declared in `content` under
     /// a title. A nested section replaces the title until it ends.
     public func section(_ title: String, _ content: () -> Void) {
         let enclosingSection = currentSection
@@ -233,7 +236,55 @@ public final class RegistryBuilder<Model: AnyObject> {
         )
     }
 
+    // MARK: - Probes
+
+    /// Read-only state the app reports, such as whether it's connected. Agents
+    /// read probes and wait for them to change, and the overlay shows them.
+    ///
+    /// `read` runs on the main actor each time the probe is read, so keep it
+    /// cheap. When it reads an `@Observable` model, waits and the overlay see
+    /// changes at once. Otherwise waits check it every 100 ms.
+    public func probe(_ label: String, key: String, _ read: @escaping @MainActor () -> Bool) {
+        addProbe(key: key, label: label) { .bool(read()) }
+    }
+
+    /// Read-only whole-number state the app reports, such as a count of
+    /// pending uploads. See `probe(_:key:_:)` for `Bool`.
+    public func probe(_ label: String, key: String, _ read: @escaping @MainActor () -> Int) {
+        addProbe(key: key, label: label) { .int(read()) }
+    }
+
+    /// Read-only decimal state the app reports, such as download progress.
+    /// See `probe(_:key:_:)` for `Bool`.
+    public func probe(_ label: String, key: String, _ read: @escaping @MainActor () -> Double) {
+        addProbe(key: key, label: label) { .double(read()) }
+    }
+
+    /// Read-only text the app reports, such as the current screen.
+    /// See `probe(_:key:_:)` for `Bool`.
+    public func probe(_ label: String, key: String, _ read: @escaping @MainActor () -> String) {
+        addProbe(key: key, label: label) { .string(read()) }
+    }
+
+    /// Read-only date the app reports, such as the last sync.
+    /// See `probe(_:key:_:)` for `Bool`.
+    public func probe(_ label: String, key: String, _ read: @escaping @MainActor () -> Date) {
+        addProbe(key: key, label: label) { .date(read()) }
+    }
+
     // MARK: - Private
+
+    private func isControlOrProbeKey(_ key: String) -> Bool {
+        controls.contains { $0.key == key } || probes.contains { $0.key == key }
+    }
+
+    private func addProbe(key: String, label: String, read: @escaping @MainActor () -> ControlValue) {
+        guard !isControlOrProbeKey(key) else {
+            assertionFailure("SaveState: duplicate probe key \"\(key)\"")
+            return
+        }
+        probes.append(RegisteredProbe(key: key, label: label, section: currentSection, read: read))
+    }
 
     private func addControl(
         key: String,
@@ -245,7 +296,7 @@ public final class RegistryBuilder<Model: AnyObject> {
         readReal: (() -> ControlValue)? = nil,
         readEffective: (() -> ControlValue)? = nil
     ) {
-        guard !controls.contains(where: { $0.key == key }) else {
+        guard !isControlOrProbeKey(key) else {
             assertionFailure("SaveState: duplicate control key \"\(key)\"")
             return
         }
@@ -286,6 +337,13 @@ struct RegisteredAction {
     let section: String?
     let isDestructive: Bool
     let perform: @MainActor () async throws -> Void
+}
+
+struct RegisteredProbe {
+    let key: String
+    let label: String
+    let section: String?
+    let read: @MainActor () -> ControlValue
 }
 
 struct RegisteredScenario {

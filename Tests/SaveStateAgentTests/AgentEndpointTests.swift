@@ -17,6 +17,15 @@ private final class Model {
     var runs = 0
     var scenarioRuns = 0
     var ratio = 1.0
+    var pending = 0
+    var probeReads = 0
+    var started = false
+}
+
+/// How a test ends a client's request early.
+private enum Ending: CaseIterable {
+    case disconnect
+    case stop
 }
 
 private enum Boom: Error {
@@ -276,6 +285,10 @@ struct AgentEndpointTests {
             r.action("Erase", key: "erase", destructive: true) { model.runs = 0 }
             r.action("Throw", key: "throw") { throw Boom.failed }
             r.scenario("Expired", key: "expired") { state in state.scenarioRuns += 1 }
+            r.probe("Pending", key: "pending") {
+                model.probeReads += 1
+                return model.pending
+            }
         }
     }
 
@@ -703,6 +716,46 @@ struct AgentEndpointTests {
         }
     }
 
+    /// A registry whose action and scenario sleep before changing the model, so
+    /// cancelling them partway through would skip the change.
+    private func makeSleepingRegistry() -> SaveStateRegistry {
+        let model = model
+        return SaveStateRegistry(model: model, store: OverrideStore(suiteName: scratch.suiteName), isEnabled: true) { r in
+            r.action("Sleep", key: "sleep") {
+                model.started = true
+                try await Task.sleep(for: .milliseconds(300))
+                model.runs += 1
+            }
+            r.scenario("Sleep", key: "sleep") { state in
+                state.started = true
+                try await Task.sleep(for: .milliseconds(300))
+                state.scenarioRuns += 1
+            }
+        }
+    }
+
+    @Test(.timeLimit(.minutes(1)), arguments: [WireRequest.runAction(key: "sleep"), .applyScenario(key: "sleep")], Ending.allCases)
+    private func endingARequestEarlyDoesNotCancelTheAppsWork(request: WireRequest, ending: Ending) async throws {
+        let endpoint = try await start(makeSleepingRegistry())
+        defer { endpoint.stop() }
+        let client = try await connect(endpoint)
+        try await client.send(RequestEnvelope(id: 1, request: request))
+        while !model.started {
+            try await Task.sleep(for: .milliseconds(10))
+        }
+
+        switch ending {
+        case .disconnect: client.disconnect()
+        case .stop: endpoint.stop()
+        }
+
+        let deadline = ContinuousClock.now + .seconds(3)
+        while model.runs + model.scenarioRuns == 0, ContinuousClock.now < deadline {
+            try await Task.sleep(for: .milliseconds(10))
+        }
+        #expect(model.runs + model.scenarioRuns == 1)
+    }
+
     @Test func anIdleClientDisconnectingLeavesOthersConnected() async throws {
         let endpoint = try await start()
         defer { endpoint.stop() }
@@ -737,6 +790,7 @@ struct AgentEndpointTests {
         }
         #expect(description.controls.map(\.key) == ["on", "mode"])
         #expect(description.scenarios.map(\.key) == ["expired"])
+        #expect(description.probes.map(\.key) == ["pending"])
 
         guard case .control(let control) = try await perform(.read(key: "on"), on: client) else {
             Issue.record("Expected a control")
@@ -883,6 +937,216 @@ struct AgentEndpointTests {
         #expect(response.id == nil)
         #expect(failureCode(response.result) == .badRequest)
         #expect(try await perform(.runAction(key: "run"), on: client) == .done)
+    }
+
+    // MARK: - Probes
+
+    private func message(_ result: WireResult) -> String? {
+        if case .failure(let error) = result { return error.message }
+        return nil
+    }
+
+    /// Polls, because the endpoint reads probes on its own schedule.
+    private func probeReadsStop(within limit: Duration = .seconds(2)) async -> Bool {
+        let deadline = ContinuousClock.now + limit
+        var reads = model.probeReads
+        while ContinuousClock.now < deadline {
+            try? await Task.sleep(for: .milliseconds(300))
+            if model.probeReads == reads { return true }
+            reads = model.probeReads
+        }
+        return false
+    }
+
+    @Test func readsProbes() async throws {
+        let endpoint = try await start()
+        defer { endpoint.stop() }
+        let client = try await connect(endpoint)
+        model.pending = 2
+
+        let result = try await perform(.readProbe(key: "pending"), on: client)
+
+        #expect(result == .probe(probe: ProbeDescription(key: "pending", label: "Pending", section: nil, value: .int(2))))
+        #expect(failureCode(try await perform(.readProbe(key: "on"), on: client)) == .unknownProbe)
+        #expect(failureCode(try await perform(.read(key: "pending"), on: client)) == .unknownControl)
+    }
+
+    @Test func aWaitReturnsTheValueThatMetItsCondition() async throws {
+        let endpoint = try await start()
+        defer { endpoint.stop() }
+        let client = try await connect(endpoint)
+        let model = model
+        Task {
+            try? await Task.sleep(for: .milliseconds(50))
+            model.pending = 3
+        }
+
+        let result = try await perform(
+            .wait(key: "pending", condition: .atLeast(value: .int(3)), timeoutMilliseconds: 5_000),
+            on: client
+        )
+
+        #expect(result == .probe(probe: ProbeDescription(key: "pending", label: "Pending", section: nil, value: .int(3))))
+    }
+
+    @Test func aWaitThatTimesOutSaysHowLongItWaited() async throws {
+        let endpoint = try await start()
+        defer { endpoint.stop() }
+        let client = try await connect(endpoint)
+
+        let result = try await perform(
+            .wait(key: "pending", condition: .equals(value: .int(1)), timeoutMilliseconds: 200),
+            on: client
+        )
+
+        #expect(failureCode(result) == .timedOut)
+        #expect(message(result) == #"The probe "pending" didn't meet the condition within 200 ms."#)
+    }
+
+    @Test func aNegativeTimeoutChecksOnce() async throws {
+        let endpoint = try await start()
+        defer { endpoint.stop() }
+        let client = try await connect(endpoint)
+
+        let result = try await perform(
+            .wait(key: "pending", condition: .equals(value: .int(1)), timeoutMilliseconds: -5_000),
+            on: client
+        )
+
+        #expect(message(result) == #"The probe "pending" didn't meet the condition within 0 ms."#)
+        #expect(model.probeReads == 1)
+    }
+
+    @Test(arguments: [
+        (-1, Duration.zero),
+        (0, .zero),
+        (1_500, .milliseconds(1_500)),
+        (30_000, .seconds(30)),
+        (30_001, .seconds(30)),
+        (Int.max, .seconds(30))
+    ])
+    func waitTimeoutsAreClampedToThirtySeconds(milliseconds: Int, expected: Duration) {
+        #expect(AgentEndpoint.waitTimeout(milliseconds: milliseconds) == expected)
+    }
+
+    @Test(arguments: [
+        (Duration.milliseconds(1_500), "1500 ms"),
+        (.seconds(30), "30000 ms"),
+        (.milliseconds(200), "200 ms")
+    ])
+    func aTimeoutSaysHowLongItWaitedInMilliseconds(timeout: Duration, expected: String) {
+        let error = WireError(saveStateError: .timedOut(key: "pending", timeout: timeout))
+
+        #expect(error.code == .timedOut)
+        #expect(error.message == "The probe \"pending\" didn't meet the condition within \(expected).")
+    }
+
+    @Test(arguments: [
+        (
+            ProbeCondition.atLeast(value: .bool(true)), ControlValue.bool(false),
+            #"atLeast true can't apply to the probe "p", whose value is false (a Boolean)."#
+        ),
+        (
+            .equals(value: .string("3")), .int(3),
+            #"equals "3" can't apply to the probe "p", whose value is 3 (a number)."#
+        ),
+        (
+            .atMost(value: .string("soon")), .date(Date(timeIntervalSince1970: 1_800_000_000)),
+            #"atMost "soon" can't apply to the probe "p", whose value is "2027-01-15T08:00:00Z" (a date)."#
+        ),
+        (
+            .notEquals(value: .double(1.5)), .string("idle"),
+            #"notEquals 1.5 can't apply to the probe "p", whose value is "idle" (a string)."#
+        ),
+        (
+            .equals(value: .null), .null,
+            #"equals null can't apply to the probe "p", whose value is null (no value)."#
+        )
+    ])
+    func anInvalidConditionNamesItsArgumentsAsJSON(condition: ProbeCondition, value: ControlValue, expected: String) {
+        let error = WireError(saveStateError: .invalidCondition(key: "p", condition: condition, value: value))
+
+        #expect(error.code == .invalidCondition)
+        #expect(error.message == expected)
+    }
+
+    @Test func badWaitsAreReportedBeforeWaiting() async throws {
+        let endpoint = try await start()
+        defer { endpoint.stop() }
+        let client = try await connect(endpoint)
+
+        let invalid = try await perform(
+            .wait(key: "pending", condition: .atLeast(value: .bool(true)), timeoutMilliseconds: 30_000),
+            on: client
+        )
+        let unknown = try await perform(
+            .wait(key: "nope", condition: .equals(value: .int(1)), timeoutMilliseconds: 30_000),
+            on: client
+        )
+
+        #expect(failureCode(invalid) == .invalidCondition)
+        #expect(message(invalid)?.contains(#""pending""#) == true)
+        #expect(failureCode(unknown) == .unknownProbe)
+        #expect(message(unknown) == #"No probe has the key "nope"."#)
+    }
+
+    @Test func aRequestSentDuringAWaitIsAnsweredAfterIt() async throws {
+        let endpoint = try await start()
+        defer { endpoint.stop() }
+        let client = try await connect(endpoint)
+
+        try await client.send(RequestEnvelope(
+            id: 1,
+            request: .wait(key: "pending", condition: .equals(value: .int(1)), timeoutMilliseconds: 300)
+        ))
+        try await client.send(RequestEnvelope(id: 2, request: .runAction(key: "run")))
+
+        let first = try await client.receive(ResponseEnvelope.self)
+        #expect(first.id == 1)
+        #expect(failureCode(first.result) == .timedOut)
+        let second = try await client.receive(ResponseEnvelope.self)
+        #expect(second.id == 2)
+        #expect(second.result == .done)
+        #expect(model.runs == 1)
+    }
+
+    @Test(.timeLimit(.minutes(1))) func aClientThatLeavesMidWaitClosesAndCancelsIt() async throws {
+        let endpoint = try await start()
+        defer { endpoint.stop() }
+        let client = try await connect(endpoint)
+        try await client.send(RequestEnvelope(
+            id: 1,
+            request: .wait(key: "pending", condition: .equals(value: .int(1)), timeoutMilliseconds: 30_000)
+        ))
+        while model.probeReads < 2 {
+            try await Task.sleep(for: .milliseconds(20))
+        }
+
+        client.disconnect()
+
+        let deadline = ContinuousClock.now + .seconds(3)
+        while endpoint.connectionCount > 0, ContinuousClock.now < deadline {
+            try await Task.sleep(for: .milliseconds(20))
+        }
+        #expect(endpoint.connectionCount == 0)
+        #expect(await probeReadsStop())
+    }
+
+    @Test(.timeLimit(.minutes(1))) func stoppingMidWaitCancelsIt() async throws {
+        let endpoint = try await start()
+        let client = try await connect(endpoint)
+        try await client.send(RequestEnvelope(
+            id: 1,
+            request: .wait(key: "pending", condition: .equals(value: .int(1)), timeoutMilliseconds: 30_000)
+        ))
+        while model.probeReads < 2 {
+            try await Task.sleep(for: .milliseconds(20))
+        }
+
+        endpoint.stop()
+
+        #expect(await probeReadsStop())
+        #expect(await client.isClosedByServer())
     }
 
     // MARK: - Network exposure

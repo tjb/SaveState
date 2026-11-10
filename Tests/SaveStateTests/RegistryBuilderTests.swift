@@ -341,6 +341,45 @@ struct DuplicateKeyTests {
         #expect(output.contains(#"duplicate scenario key "same""#))
     }
 
+    @Test func aDuplicateProbeKeyStopsADebugBuild() async throws {
+        let result = await #expect(processExitsWith: .failure, observing: [\.standardErrorContent]) {
+            await MainActor.run {
+                let builder = RegistryBuilder(model: DebugModel())
+                builder.probe("A", key: "same") { true }
+                builder.probe("B", key: "same") { 1 }
+            }
+        }
+
+        let output = String(bytes: try #require(result).standardErrorContent, encoding: .utf8) ?? ""
+        #expect(output.contains(#"duplicate probe key "same""#))
+    }
+
+    @Test func aProbeReusingAControlKeyStopsADebugBuild() async throws {
+        let result = await #expect(processExitsWith: .failure, observing: [\.standardErrorContent]) {
+            await MainActor.run {
+                let builder = RegistryBuilder(model: DebugModel())
+                builder.toggle("A", key: "same", \.showsOnboarding)
+                builder.probe("B", key: "same") { true }
+            }
+        }
+
+        let output = String(bytes: try #require(result).standardErrorContent, encoding: .utf8) ?? ""
+        #expect(output.contains(#"duplicate probe key "same""#))
+    }
+
+    @Test func aControlReusingAProbeKeyStopsADebugBuild() async throws {
+        let result = await #expect(processExitsWith: .failure, observing: [\.standardErrorContent]) {
+            await MainActor.run {
+                let builder = RegistryBuilder(model: DebugModel())
+                builder.probe("A", key: "same") { true }
+                builder.toggle("B", key: "same", \.showsOnboarding)
+            }
+        }
+
+        let output = String(bytes: try #require(result).standardErrorContent, encoding: .utf8) ?? ""
+        #expect(output.contains(#"duplicate control key "same""#))
+    }
+
     @Test func distinctKeysDoNotStopTheProcess() async {
         await #expect(processExitsWith: .success) {
             await MainActor.run {
@@ -351,6 +390,8 @@ struct DuplicateKeyTests {
                 builder.action("D", key: "four") {}
                 builder.scenario("E", key: "five") { _ in }
                 builder.scenario("F", key: "six") { _ in }
+                builder.probe("G", key: "seven") { true }
+                builder.probe("H", key: "eight") { 8 }
             }
         }
     }
@@ -373,6 +414,20 @@ struct DuplicateKeyTests {
         #expect(builder.controls.map(\.label) == ["First"])
         #expect(builder.actions.map(\.label) == ["First"])
         #expect(builder.scenarios.map(\.label) == ["First"])
+    }
+
+    @Test func aControlOrProbeKeyCanOnlyBeUsedOnceInARelease() {
+        let builder = RegistryBuilder(model: DebugModel())
+
+        builder.toggle("Control", key: "control", \.showsOnboarding)
+        builder.probe("Probe", key: "control") { true }
+        builder.probe("Probe", key: "probe") { true }
+        builder.probe("Second probe", key: "probe") { 2 }
+        builder.text("Control", key: "probe", \.greeting)
+
+        #expect(builder.controls.map(\.key) == ["control"])
+        #expect(builder.probes.map(\.label) == ["Probe"])
+        #expect(builder.probes.map(\.key) == ["probe"])
     }
 }
 #endif

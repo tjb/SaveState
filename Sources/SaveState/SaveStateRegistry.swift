@@ -2,7 +2,8 @@ import Foundation
 import Observation
 import SaveStateProtocol
 
-/// The registry of an app's debug state: its controls, actions, and scenarios.
+/// The registry of an app's debug state: its controls, actions, scenarios, and
+/// probes.
 ///
 /// Create one at launch, binding controls to the model that holds your debug
 /// state:
@@ -42,10 +43,15 @@ public final class SaveStateRegistry {
     private let controls: [Control]
     private let actions: [RegisteredAction]
     private let scenarios: [RegisteredScenario]
+    private let probes: [RegisteredProbe]
 
     /// Bumped after every change made through the registry, so observers of
     /// anything that reads it are notified.
     private var revision = 0
+
+    /// How often a probe wait checks state that isn't observable. Tests lengthen
+    /// it to tell an observation wake from a tick.
+    @ObservationIgnored var probeWaitTick: Duration = .milliseconds(100)
 
     /// Creates a registry and restores stored values into the model.
     ///
@@ -55,7 +61,7 @@ public final class SaveStateRegistry {
     ///   - store: Where values that outlast a launch live.
     ///   - isEnabled: Defaults to `true` only in Debug builds. Pass your own
     ///     flag for QA or TestFlight builds.
-    ///   - declare: Declares the controls, actions, and scenarios.
+    ///   - declare: Declares the controls, actions, scenarios, and probes.
     public init<Model: AnyObject>(
         model: Model,
         store: OverrideStore = .standard,
@@ -69,6 +75,7 @@ public final class SaveStateRegistry {
         controls = builder.controls
         actions = builder.actions
         scenarios = builder.scenarios
+        probes = builder.probes
         if isEnabled {
             restoreStoredValues()
         }
@@ -76,8 +83,10 @@ public final class SaveStateRegistry {
 
     // MARK: - Reading
 
-    /// A snapshot of every control with its current values, every action, and
-    /// every scenario.
+    /// A snapshot of every control with its current values, every action,
+    /// every scenario, and every probe with its current value. It reads every
+    /// probe, so a SwiftUI view that calls it updates when an observable
+    /// probe changes.
     public func describe() -> RegistryDescription {
         observeChanges()
         return RegistryDescription(
@@ -97,22 +106,67 @@ public final class SaveStateRegistry {
                     section: scenario.section,
                     summary: scenario.summary
                 )
-            }
+            },
+            probes: probes.map { probeDescription(of: $0, value: $0.read()) }
         )
+    }
+
+    /// One control with its current values.
+    public func control(forKey key: String) throws -> ControlDescription {
+        observeChanges()
+        return controlDescription(of: try registeredControl(forKey: key))
+    }
+
+    /// One probe with its current value. Reads only that probe.
+    ///
+    /// Probes are read-only, so this works when the registry is disabled.
+    public func probe(forKey key: String) throws -> ProbeDescription {
+        observeChanges()
+        let probe = try registeredProbe(forKey: key)
+        return probeDescription(of: probe, value: probe.read())
+    }
+
+    /// Waits until a probe meets a condition, and returns the probe with the
+    /// value that met it.
+    ///
+    /// It checks at once, then again whenever an observable value the probe
+    /// reads changes, and every 100 ms for state that isn't observable. At the
+    /// deadline it checks one last time. Probes are read-only, so this works
+    /// when the registry is disabled.
+    ///
+    /// - Throws: `SaveStateError.unknownProbe` for an unknown key and
+    ///   `SaveStateError.invalidCondition` when the condition can't apply to the
+    ///   probe's value, both before waiting. `SaveStateError.timedOut` when the
+    ///   timeout passes first, and `CancellationError` when the task is
+    ///   cancelled.
+    public func wait(
+        forProbe key: String,
+        until condition: ProbeCondition,
+        timeout: Duration
+    ) async throws -> ProbeDescription {
+        let probe = try registeredProbe(forKey: key)
+        let value = try await ProbeWait(
+            key: key,
+            condition: condition,
+            timeout: timeout,
+            tick: probeWaitTick,
+            read: probe.read
+        ).run()
+        return probeDescription(of: probe, value: value)
     }
 
     /// The control's own value: the override for optional controls, otherwise
     /// the setting.
     public func value(forKey key: String) throws -> ControlValue {
         observeChanges()
-        return try control(forKey: key).binding.read()
+        return try registeredControl(forKey: key).binding.read()
     }
 
     /// The value the app should act on: the real value when an optional
     /// control has no override.
     public func effectiveValue(forKey key: String) throws -> ControlValue {
         observeChanges()
-        return effectiveValue(of: try control(forKey: key))
+        return effectiveValue(of: try registeredControl(forKey: key))
     }
 
     /// The keys of controls with anything to reset, in declaration order: the
@@ -167,7 +221,7 @@ public final class SaveStateRegistry {
     /// forgets any stored value.
     public func reset(_ key: String) throws {
         guard isEnabled else { throw SaveStateError.disabled }
-        let control = try self.control(forKey: key)
+        let control = try registeredControl(forKey: key)
         defer { revision += 1 }
         restoreDefault(of: control)
     }
@@ -216,11 +270,22 @@ public final class SaveStateRegistry {
         _ = revision
     }
 
-    private func control(forKey key: String) throws -> Control {
+    private func registeredControl(forKey key: String) throws -> Control {
         guard let control = controls.first(where: { $0.key == key }) else {
             throw SaveStateError.unknownControl(key)
         }
         return control
+    }
+
+    private func registeredProbe(forKey key: String) throws -> RegisteredProbe {
+        guard let probe = probes.first(where: { $0.key == key }) else {
+            throw SaveStateError.unknownProbe(key)
+        }
+        return probe
+    }
+
+    private func probeDescription(of probe: RegisteredProbe, value: ControlValue) -> ProbeDescription {
+        ProbeDescription(key: probe.key, label: probe.label, section: probe.section, value: value)
     }
 
     private func effectiveValue(of control: Control) -> ControlValue {

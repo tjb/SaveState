@@ -131,7 +131,9 @@ claude mcp add savestate -- "$PWD/CLI/.build/release/savestate" mcp
 
 With a Debug build of your app running in a booted simulator, the agent gets
 `savestate_list_apps`, `savestate_describe`, `savestate_set`,
-`savestate_run_action`, `savestate_apply_scenario`, and `savestate_read`.
+`savestate_run_action`, `savestate_apply_scenario`, `savestate_read`, and
+`savestate_wait`. `savestate_read` reads a control or a probe by key, and
+`savestate_wait` waits up to 30 seconds for a probe to meet a condition.
 Destructive actions are refused, so a person has to run those.
 
 ### Coming from PremiumToggle

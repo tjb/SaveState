@@ -205,6 +205,14 @@ public final class AgentEndpoint {
 
     // MARK: - Connections
 
+    /// The longest a `wait` request may take, so a client can't hold one open forever.
+    static let maximumWaitTimeout: Duration = .seconds(30)
+
+    /// A `wait` request's timeout, clamped to zero through `maximumWaitTimeout`.
+    static func waitTimeout(milliseconds: Int) -> Duration {
+        min(max(.milliseconds(milliseconds), .zero), maximumWaitTimeout)
+    }
+
     private func accept(_ connection: NWConnection) {
         let agentConnection = AgentConnection(connection: connection, token: info.token, registry: registry) { [weak self] closed in
             self?.connections[ObjectIdentifier(closed)] = nil
@@ -215,6 +223,9 @@ public final class AgentEndpoint {
 }
 
 /// One client: its hello, then its requests, answered one at a time and in order.
+///
+/// It keeps a receive pending while it answers, so it sees a client leave even
+/// during a long wait, and queues requests that arrive meanwhile.
 @MainActor
 private final class AgentConnection {
     private static let helloTimeout: Duration = .seconds(5)
@@ -225,6 +236,10 @@ private final class AgentConnection {
     private let onClose: (AgentConnection) -> Void
     private var isAuthenticated = false
     private var isClosed = false
+    /// Requests that arrived while another was being answered.
+    private var queuedRequests: [Data] = []
+    /// The request being answered, cancelled when the connection closes.
+    private var inFlight: Task<Void, Never>?
 
     init(
         connection: NWConnection,
@@ -261,6 +276,9 @@ private final class AgentConnection {
     func close() {
         guard !isClosed else { return }
         isClosed = true
+        inFlight?.cancel()
+        inFlight = nil
+        queuedRequests.removeAll()
         connection.cancel()
         onClose(self)
     }
@@ -289,11 +307,19 @@ private final class AgentConnection {
             handleHello(data)
             return
         }
-        Task {
+        queuedRequests.append(data)
+        answerNextRequest()
+        // Keep reading while a request is answered, so the next one queues and a close is noticed.
+        receive()
+    }
+
+    private func answerNextRequest() {
+        guard inFlight == nil, !isClosed, !queuedRequests.isEmpty else { return }
+        let data = queuedRequests.removeFirst()
+        inFlight = Task {
             await answer(data)
-            if !isClosed {
-                receive()
-            }
+            inFlight = nil
+            answerNextRequest()
         }
     }
 
@@ -352,19 +378,27 @@ private final class AgentConnection {
             case .describe:
                 return .description(registry: registry.describe())
             case .read(let key):
-                guard let control = registry.describe().controls.first(where: { $0.key == key }) else {
-                    throw SaveStateError.unknownControl(key)
-                }
-                return .control(control: control)
+                return .control(control: try registry.control(forKey: key))
             case .set(let key, let value, let persist):
                 try registry.set(value, forKey: key, persist: persist)
                 return .done
             case .runAction(let key):
-                try await registry.runAction(key)
+                // Unstructured, so closing the connection doesn't cancel the app's work halfway.
+                let registry = registry
+                try await Task { try await registry.runAction(key) }.value
                 return .done
             case .applyScenario(let key):
-                try await registry.applyScenario(key)
+                let registry = registry
+                try await Task { try await registry.applyScenario(key) }.value
                 return .done
+            case .readProbe(let key):
+                return .probe(probe: try registry.probe(forKey: key))
+            case .wait(let key, let condition, let timeoutMilliseconds):
+                return .probe(probe: try await registry.wait(
+                    forProbe: key,
+                    until: condition,
+                    timeout: AgentEndpoint.waitTimeout(milliseconds: timeoutMilliseconds)
+                ))
             }
         } catch let error as SaveStateError {
             return .failure(error: WireError(saveStateError: error))
@@ -393,7 +427,9 @@ private final class AgentConnection {
     }
 }
 
-private extension WireError {
+extension WireError {
+    /// The error sent to the bridge for a registry error. Messages name values
+    /// as the agent wrote them, such as `true` or `"idle"`, not as Swift prints them.
     init(saveStateError error: SaveStateError) {
         switch error {
         case .disabled:
@@ -411,6 +447,55 @@ private extension WireError {
             )
         case .invalidValue(let key, let value, let kind):
             self.init(code: .invalidValue, message: "The control \"\(key)\" of kind \(kind) can't take \(value).")
+        case .unknownProbe(let key):
+            self.init(code: .unknownProbe, message: "No probe has the key \"\(key)\".")
+        case .invalidCondition(let key, let condition, let value):
+            self.init(
+                code: .invalidCondition,
+                message: """
+                \(Self.describe(condition)) can't apply to the probe "\(key)", whose value is \(Self.describe(value)) \
+                (\(Self.kind(of: value))).
+                """
+            )
+        case .timedOut(let key, let timeout):
+            let milliseconds = timeout.components.seconds * 1000 + timeout.components.attoseconds / 1_000_000_000_000_000
+            self.init(
+                code: .timedOut,
+                message: "The probe \"\(key)\" didn't meet the condition within \(milliseconds) ms."
+            )
+        }
+    }
+
+    /// A condition as the tool's arguments name it, such as `atLeast 3`.
+    private static func describe(_ condition: ProbeCondition) -> String {
+        let name = switch condition {
+        case .equals: "equals"
+        case .notEquals: "notEquals"
+        case .atLeast: "atLeast"
+        case .atMost: "atMost"
+        }
+        return "\(name) \(describe(condition.value))"
+    }
+
+    /// A value in its JSON form, with a date as an ISO 8601 string.
+    private static func describe(_ value: ControlValue) -> String {
+        switch value {
+        case .null: "null"
+        case .bool(let flag): String(flag)
+        case .int(let number): String(number)
+        case .double(let number): String(number)
+        case .string(let text): "\"\(text)\""
+        case .date(let date): "\"\(date.formatted(.iso8601))\""
+        }
+    }
+
+    private static func kind(of value: ControlValue) -> String {
+        switch value {
+        case .null: "no value"
+        case .bool: "a Boolean"
+        case .int, .double: "a number"
+        case .string: "a string"
+        case .date: "a date"
         }
     }
 }

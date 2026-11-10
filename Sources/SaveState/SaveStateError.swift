@@ -14,4 +14,11 @@ public enum SaveStateError: Error, Equatable, Sendable {
     case destructiveActionNotAllowed(String)
     /// The control's kind doesn't accept this value.
     case invalidValue(key: String, value: ControlValue, kind: ControlKind)
+    /// No probe has this key.
+    case unknownProbe(String)
+    /// The condition can't apply to the probe's value, such as `atLeast` on a
+    /// Boolean. A wait throws this at once instead of waiting.
+    case invalidCondition(key: String, condition: ProbeCondition, value: ControlValue)
+    /// The probe didn't meet the condition before the timeout.
+    case timedOut(key: String, timeout: Duration)
 }

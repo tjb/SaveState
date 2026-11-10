@@ -60,7 +60,7 @@ public enum ServerHello: Codable, Hashable, Sendable {
 
 /// One operation a client asks of an app.
 public enum WireRequest: Codable, Hashable, Sendable {
-    /// Returns a `.description` of every control, action, and scenario.
+    /// Returns a `.description` of every control, action, scenario, and probe.
     case describe
     /// Returns a `.control` with one control's current values.
     case read(key: String)
@@ -72,6 +72,12 @@ public enum WireRequest: Codable, Hashable, Sendable {
     case runAction(key: String)
     /// Applies a scenario.
     case applyScenario(key: String)
+    /// Returns a `.probe` with one probe's current value.
+    case readProbe(key: String)
+    /// Waits until a probe meets `condition`, then returns a `.probe` with the
+    /// value that met it. Fails with `timedOut` when `timeoutMilliseconds`
+    /// pass first. The app caps the timeout at 30 seconds.
+    case wait(key: String, condition: ProbeCondition, timeoutMilliseconds: Int)
 }
 
 /// How a request ended.
@@ -82,6 +88,8 @@ public enum WireResult: Codable, Hashable, Sendable {
     case description(registry: RegistryDescription)
     /// One control's current values.
     case control(control: ControlDescription)
+    /// One probe's current value.
+    case probe(probe: ProbeDescription)
     /// The request failed.
     case failure(error: WireError)
 }
@@ -138,6 +146,13 @@ public struct WireError: Codable, Hashable, Sendable, Error {
         case invalidValue
         /// The app's action or scenario threw.
         case operationFailed
+        /// No probe has this key.
+        case unknownProbe
+        /// The probe didn't meet the condition before the timeout.
+        case timedOut
+        /// The condition can't apply to the probe's value, such as `atLeast` on
+        /// a Boolean.
+        case invalidCondition
     }
 
     /// What kind of failure this is.

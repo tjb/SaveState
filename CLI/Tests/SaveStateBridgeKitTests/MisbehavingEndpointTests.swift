@@ -1,6 +1,7 @@
 import Foundation
 import MCP
 import Network
+import Synchronization
 import SaveStateProtocol
 import Testing
 @testable import SaveStateBridgeKit
@@ -28,7 +29,27 @@ final class FakeEndpoint: Sendable {
         case garbageResponse
         /// Accepts the hello, then answers with this envelope in a binary frame.
         case answersInBinary(ResponseEnvelope)
+        /// Accepts the hello, then answers each request with what `reply` returns
+        /// for it, after `delay`, the way an app finishing a wait looks.
+        case replies(after: Duration = .zero, reply: @Sendable (WireRequest) -> WireResult)
     }
+
+    /// The requests the endpoint received, in order, across every connection.
+    final class RequestLog: Sendable {
+        private let requests = Mutex<[WireRequest]>([])
+
+        var all: [WireRequest] {
+            requests.withLock { $0 }
+        }
+
+        func record(_ data: Data?) {
+            guard let data, let envelope = try? JSONDecoder().decode(RequestEnvelope.self, from: data) else { return }
+            requests.withLock { $0.append(envelope.request) }
+        }
+    }
+
+    /// What this endpoint received.
+    let log = RequestLog()
 
     private let listener: NWListener
     private let queue = DispatchQueue(label: "FakeEndpoint")
@@ -46,9 +67,10 @@ final class FakeEndpoint: Sendable {
         let listener = try NWListener(using: parameters)
         self.listener = listener
         let queue = queue
+        let log = log
         listener.newConnectionHandler = { connection in
             connection.start(queue: queue)
-            Self.serve(connection, behavior: behavior, step: 0)
+            Self.serve(connection, behavior: behavior, step: 0, log: log)
         }
         port = try await withCheckedThrowingContinuation { continuation in
             nonisolated(unsafe) var pending: CheckedContinuation<UInt16, any Error>? = continuation
@@ -86,8 +108,37 @@ final class FakeEndpoint: Sendable {
         )
     }
 
-    private static func serve(_ connection: NWConnection, behavior: Behavior, step: Int) {
-        if case .neverUpgrades = behavior { return }
+    private static func serve(_ connection: NWConnection, behavior: Behavior, step: Int, log: RequestLog) {
+        switch behavior {
+        case .neverUpgrades:
+            return
+        case .replies(let delay, let reply):
+            serveReplies(on: connection, after: delay, with: reply, step: step, log: log)
+        default:
+            serveScripted(connection, behavior: behavior, step: step)
+        }
+    }
+
+    private static func serveReplies(
+        on connection: NWConnection,
+        after delay: Duration,
+        with reply: @escaping @Sendable (WireRequest) -> WireResult,
+        step: Int,
+        log: RequestLog
+    ) {
+        connection.receiveMessage { content, _, _, error in
+            guard error == nil else { return }
+            if step == 0 {
+                send(ServerHello.accepted, on: connection)
+                serveReplies(on: connection, after: delay, with: reply, step: 1, log: log)
+                return
+            }
+            log.record(content)
+            answer(content, after: delay, with: reply, on: connection)
+        }
+    }
+
+    private static func serveScripted(_ connection: NWConnection, behavior: Behavior, step: Int) {
         connection.receiveMessage { _, _, _, error in
             guard error == nil else { return }
             switch (behavior, step) {
@@ -99,7 +150,7 @@ final class FakeEndpoint: Sendable {
                 send(ServerHello.rejected(error: wireError), on: connection)
             case (.answers, 0), (.closesAfterRequest, 0), (.garbageResponse, 0), (.answersInBinary, 0):
                 send(ServerHello.accepted, on: connection)
-                serve(connection, behavior: behavior, step: 1)
+                serveScripted(connection, behavior: behavior, step: 1)
             case (.answersInBinary(let envelope), _):
                 guard let data = try? JSONEncoder().encode(envelope) else { return }
                 send(data, on: connection, opcode: .binary)
@@ -108,6 +159,20 @@ final class FakeEndpoint: Sendable {
             default:
                 break
             }
+        }
+    }
+
+    private static func answer(
+        _ content: Data?,
+        after delay: Duration,
+        with reply: @Sendable (WireRequest) -> WireResult,
+        on connection: NWConnection
+    ) {
+        guard let content, let envelope = try? JSONDecoder().decode(RequestEnvelope.self, from: content) else { return }
+        let answer = ResponseEnvelope(id: envelope.id, result: reply(envelope.request))
+        let nanoseconds = delay.components.seconds * 1_000_000_000 + delay.components.attoseconds / 1_000_000_000
+        DispatchQueue.global().asyncAfter(deadline: .now() + .nanoseconds(Int(nanoseconds))) {
+            send(answer, on: connection)
         }
     }
 
