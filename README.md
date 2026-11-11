@@ -5,7 +5,8 @@ agents, UI tests, and SwiftUI previews.
 
 SaveState is a Swift package for iOS apps. You declare controls (premium status,
 backend environment, a clock override), actions (seed data, reset onboarding),
-and named **scenarios** that set many of them at once, such as `expired-trial` or
+**probes** that report read-only state (pending uploads, whether it's connected),
+and named **scenarios** that set many controls at once, such as `expired-trial` or
 `power-user`. SaveState renders that registry as a debug overlay for people and
 serves it over MCP for agents, in Debug builds only.
 
@@ -14,7 +15,8 @@ serves it over MCP for agents, in Debug builds only.
 The demo app driven by the real `savestate mcp` server. The left side shows each
 tool call with a shortened result.
 
-> **Status:** v0.1, an early release. APIs can change before 1.0.
+> **Status:** v0.1.0 is released, and v0.2 is in progress on `main`: probes and
+> `savestate_wait` have shipped. APIs can change before 1.0.
 
 ## Why
 
@@ -77,6 +79,10 @@ let registry = SaveStateRegistry(model: debugState) { r in
 
 try await registry.applyScenario("expired-trial")
 ```
+
+Probes report state the app owns, such as
+`r.probe("Pending uploads", key: "pending-uploads") { uploads.count }`, for
+Bool, Int, Double, String, and Date values. Agents read them and wait on them.
 
 Keys such as `premium` and `expired-trial` are stable identifiers that agents
 and tests use. Labels are display text and can change freely.
@@ -160,6 +166,70 @@ Changes last for the current launch unless you pass `persist: true`. A change
 to a control declared `requiresRelaunch` lasts through the next launch, so
 relaunching applies it once. The overlay persists its changes; agents choose.
 
+## Apps on a sync engine
+
+When your data syncs through a sync engine, agents can't see from the UI whether
+a change has uploaded yet. Declare that state as probes, plus a scenario that
+takes the app offline. Everything here reads or calls `syncEngine`, an object
+your app already owns. **SaveState contains no sync code**: it only runs the
+closures you give it.
+
+```swift
+import SaveState
+
+@MainActor
+func makeRegistry(syncEngine: SyncEngine) -> SaveStateRegistry {
+    SaveStateRegistry(model: syncEngine) { r in
+        r.section("Sync") {
+            r.probe("Pending uploads", key: "sync.pending-uploads") {
+                syncEngine.pendingUploadCount
+            }
+            r.probe("Connected", key: "sync.connected") {
+                syncEngine.isConnected
+            }
+        }
+        r.scenario(
+            "Offline",
+            key: "offline",
+            summary: "The sync engine can't reach the server, so changes queue up."
+        ) { _ in
+            syncEngine.isSimulatingOffline = true
+        }
+        r.action("Go online", key: "go-online") {
+            syncEngine.isSimulatingOffline = false
+        }
+    }
+}
+```
+
+`SyncEngine` stands for your own type. This recipe assumes it has
+`pendingUploadCount`, `isConnected`, and an `isSimulatingOffline` flag that
+stops it from reaching the server. If your app already has a registry, add the
+`Sync` section, the scenario, and the action to it instead. The closures reach
+the sync engine through a capture, so they work whatever your registry's model
+is.
+
+An agent can then check that a change waits offline and uploads once the app is
+back online:
+
+1. `savestate_apply_scenario` with `key: "offline"`.
+2. Make a change in the app, through the UI or an action.
+3. `savestate_wait` with `key: "sync.pending-uploads"`, `condition: "atLeast"`,
+   and `value: 1`.
+4. `savestate_run_action` with `key: "go-online"`.
+5. `savestate_wait` with `key: "sync.pending-uploads"`, `condition: "equals"`,
+   and `value: 0`.
+6. `savestate_wait` with `key: "sync.connected"`, `condition: "equals"`, and
+   `value: true`.
+
+Each wait returns the probe's value and `waitedMilliseconds`, or fails when the
+condition isn't met within `timeoutSeconds`, which defaults to 10 and is at most
+30.
+
+If `SyncEngine` isn't `@Observable`, the probes still work. A wait checks them
+every 100 ms as well as on observed changes, so it still sees the new value. The
+overlay, though, shows a probe's new value only when its panel next redraws.
+
 ## Packages
 
 - `SaveState`, `SaveStateUI`, `SaveStateAgent`, `SaveStateProtocol`: the
@@ -169,6 +239,8 @@ relaunching applies it once. The overlay persists its changes; agents choose.
   It compiles to nothing on iOS, and app targets shouldn't depend on it.
 - `savestate`: a Mac CLI and MCP server for coding agents, in `CLI/`. Install it
   with `brew install tjb/tap/savestate`.
+- `SaveStateBridgeKit`: the bridge's logic as a library, in `CLI/`, for Mac
+  tools built inside this repository. It re-exports `SaveStateClientKit`.
 
 ## Requirements
 

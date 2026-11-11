@@ -85,8 +85,9 @@ and screenshots the paywall with zero taps.
   `.premiumToggle` shim, the simulator endpoint, and six MCP tools:
   `savestate_list_apps`, `savestate_describe`, `savestate_set`,
   `savestate_run_action`, `savestate_apply_scenario`, `savestate_read`.
-- **v0.2:** probes and `savestate_wait`, launch-time scenarios with relaunch,
-  the destructive-action tool, scenarios as test-only App Intents.
+- **v0.2:** probes and `savestate_wait` (done). Remaining: launch-time
+  scenarios with relaunch, the destructive-action tool, scenarios as test-only
+  App Intents.
 
 The Clock plugin only works if the app reads time through SaveState rather than
 `Date()`. Prove that adoption path early.

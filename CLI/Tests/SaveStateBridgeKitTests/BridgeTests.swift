@@ -18,8 +18,36 @@ import Testing
         contentsOf: root.appendingPathComponent("CHANGELOG.md"),
         encoding: .utf8
     )
-    let newest = changelog.split(separator: "\n").first { $0.hasPrefix("## ") }
-    #expect(newest?.hasPrefix("## \(Bridge.version) ") == true)
+    #expect(newestChangelogVersion(in: changelog)?.hasPrefix("## \(Bridge.version) ") == true)
+}
+
+/// The newest versioned `## ` heading, skipping an `## Unreleased` heading
+/// only when it comes first. Returns `nil` when there's no versioned heading
+/// or an `## Unreleased` heading appears anywhere else.
+private func newestChangelogVersion(in changelog: String) -> Substring? {
+    let headings = changelog.split(separator: "\n").filter { $0.hasPrefix("## ") }
+    let versioned = headings.first == "## Unreleased" ? headings.dropFirst() : headings[...]
+    guard !versioned.contains("## Unreleased") else { return nil }
+    return versioned.first
+}
+
+@Test func changelogVersionSkipsALeadingUnreleasedHeading() {
+    let changelog = "# Changelog\n\n## Unreleased\n\n- New.\n\n## 0.2.0 - 2026-12-01\n\n## 0.1.0 - 2026-11-02\n"
+    #expect(newestChangelogVersion(in: changelog) == "## 0.2.0 - 2026-12-01")
+}
+
+@Test func changelogVersionReadsTheFirstHeadingWithoutUnreleased() {
+    let changelog = "# Changelog\n\n## 0.2.0 - 2026-12-01\n\n## 0.1.0 - 2026-11-02\n"
+    #expect(newestChangelogVersion(in: changelog) == "## 0.2.0 - 2026-12-01")
+}
+
+@Test func changelogVersionRejectsUnreleasedBelowAVersion() {
+    let changelog = "# Changelog\n\n## 0.2.0 - 2026-12-01\n\n## Unreleased\n\n## 0.1.0 - 2026-11-02\n"
+    #expect(newestChangelogVersion(in: changelog) == nil)
+}
+
+@Test func changelogVersionIsNilWithOnlyUnreleased() {
+    #expect(newestChangelogVersion(in: "# Changelog\n\n## Unreleased\n") == nil)
 }
 
 private func text(_ content: [Tool.Content]) -> String {
