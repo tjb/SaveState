@@ -72,7 +72,7 @@ python3 .github/scripts/coverage.py .           # coverage; pass CLI for the bri
 | Transport | Simulator: loopback WebSocket plus a per-launch token, discovered through an endpoint file in the app's data container. Device: the app long-polls the Mac, so nothing listens on the phone. |
 | Bridge | Swift, on the official MCP Swift SDK. |
 | Agent writes | Session-scoped, cleared on relaunch unless `persist: true`. Overlay toggles persist. |
-| UI tests | Scenarios export as test-only App Intents from v0.2. |
+| UI tests | Scenarios export as test-only App Intents from v0.3. |
 | License | MIT. |
 
 ## Roadmap
@@ -85,9 +85,11 @@ and screenshots the paywall with zero taps.
   `.premiumToggle` shim, the simulator endpoint, and six MCP tools:
   `savestate_list_apps`, `savestate_describe`, `savestate_set`,
   `savestate_run_action`, `savestate_apply_scenario`, `savestate_read`.
-- **v0.2:** probes and `savestate_wait` (done). Remaining: launch-time
-  scenarios with relaunch, the destructive-action tool, scenarios as test-only
-  App Intents.
+- **v0.2:** probes, `savestate_wait`, and the public `SaveStateClient`
+  (released as 0.2.0).
+- **v0.3:** launch-time scenarios with relaunch, the destructive-action tool,
+  and scenarios as test-only App Intents. Build each only when a consumer needs
+  it. Splitbrain passes relaunch config as `simctl launch` arguments for now.
 
 The Clock plugin only works if the app reads time through SaveState rather than
 `Date()`. Prove that adoption path early.
