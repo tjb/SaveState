@@ -14,8 +14,11 @@ Two packages in one repo:
   - `SaveStateUI`: the overlay.
   - `SaveStateAgent`: the Debug-only endpoint the bridge talks to.
   - `SaveStateProtocol`: the versioned wire protocol shared with the bridge.
+  - `SaveStateClientKit`: the macOS-only `SaveStateClient` and `AppDiscovery`,
+    which Mac tools fetch by URL. It compiles to nothing on iOS, so no networking reaches apps.
 - `CLI/Package.swift`: Mac-side tools. Third-party dependencies are allowed here.
-  - `SaveStateBridgeKit`: bridge logic as a library, so a future Mac app can link it.
+  - `SaveStateBridgeKit`: the MCP bridge, built on and re-exporting `SaveStateClientKit`.
+    Tools in this repo link it; other projects can't fetch `CLI/` by URL.
   - `SaveStateCLI`: the CLI target. Its product builds the `savestate` command
     (`savestate mcp` runs the MCP server).
 

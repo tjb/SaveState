@@ -605,7 +605,7 @@ struct BridgeToolsTests {
     }
 
     @Test func aDiscoveryFailureIsReportedOnEveryTool() async {
-        let tools = BridgeTools(timeout: .seconds(5)) { throw BridgeError("Check that Xcode is installed.") }
+        let tools = BridgeTools(timeout: .seconds(5)) { throw BridgeError(.discoveryFailed, "Check that Xcode is installed.") }
 
         for name in ["savestate_list_apps", "savestate_describe"] {
             let result = await tools.call(name, arguments: [:])
@@ -726,60 +726,5 @@ struct BridgeToolsTests {
         let file = scratch.container(container).appendingPathComponent(EndpointInfo.relativePath)
         try FileManager.default.createDirectory(at: file.deletingLastPathComponent(), withIntermediateDirectories: true)
         try JSONEncoder().encode(info).write(to: file)
-    }
-}
-
-@Suite("Simulator listing")
-struct SimulatorListingTests {
-    @Test func aToolPastItsDeadlineIsStoppedAndReported() {
-        let start = ContinuousClock.now
-
-        #expect(throws: BridgeError.self) {
-            _ = try AppDiscovery.runTool(URL(fileURLWithPath: "/bin/sleep"), arguments: ["30"], deadline: 0.2)
-        }
-
-        #expect(ContinuousClock.now - start < .seconds(15))
-    }
-
-    @Test func aFailingToolIsReported() {
-        #expect(throws: BridgeError.self) {
-            _ = try AppDiscovery.runTool(URL(fileURLWithPath: "/usr/bin/false"), arguments: [])
-        }
-    }
-
-    @Test func aToolsOutputIsReturned() throws {
-        let data = try AppDiscovery.runTool(URL(fileURLWithPath: "/bin/echo"), arguments: ["hi"])
-
-        #expect(String(bytes: data, encoding: .utf8) == "hi\n")
-    }
-
-    @Test func malformedListingsThrow() {
-        #expect(throws: (any Error).self) {
-            _ = try AppDiscovery.parseDevices(Data("not json".utf8))
-        }
-    }
-
-    @Test func devicesAreSortedSoSelectionIsStable() throws {
-        let json = """
-        {"devices":{"iOS-27":[
-          {"udid":"B","state":"Booted","dataPath":"/b"},
-          {"udid":"A","state":"Booted","dataPath":"/a"},
-          {"udid":"C","state":"Booted","dataPath":"/c"}
-        ]}}
-        """
-
-        #expect(try AppDiscovery.parseDevices(Data(json.utf8)).map(\.identifier) == ["A", "B", "C"])
-    }
-
-    @Test func keepsOnlyBootedDevices() throws {
-        let json = """
-        {"devices":{"iOS-27":[
-          {"udid":"A","state":"Booted","dataPath":"/a","name":"One"},
-          {"udid":"B","state":"Shutdown","dataPath":"/b","name":"Two"}
-        ],"iOS-18":[]}}
-        """
-        let devices = try AppDiscovery.parseDevices(Data(json.utf8))
-
-        #expect(devices == [SimulatorDevice(identifier: "A", dataPath: URL(fileURLWithPath: "/a"))])
     }
 }

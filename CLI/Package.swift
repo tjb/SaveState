@@ -4,15 +4,24 @@ import PackageDescription
 // The Mac-side tools: the `savestate` CLI and MCP bridge.
 //
 // This is a separate package so its third-party dependencies never reach
-// apps that add SaveState. The bridge logic lives in a library target,
-// SaveStateBridgeKit, so a future Mac app can link it.
+// apps that add SaveState. The bridge logic lives in SaveStateBridgeKit, a
+// library product for Mac tools built inside this repo. It re-exports
+// SaveStateClientKit, whose SaveStateClient reads, changes, and waits on a
+// running app's debug state without going through MCP. The MCP server is
+// `package` access, so the MCP SDK's types never become part of its API,
+// though the SDK still links.
+//
+// SwiftPM can't fetch this package by git URL: it isn't at the repo root, and
+// it depends on ".." by path. Projects outside this repo depend on the root
+// package's SaveStateClientKit product by URL instead.
 let package = Package(
     name: "savestate-cli",
     platforms: [
         .macOS(.v15)
     ],
     products: [
-        .executable(name: "savestate", targets: ["SaveStateCLI"])
+        .executable(name: "savestate", targets: ["SaveStateCLI"]),
+        .library(name: "SaveStateBridgeKit", targets: ["SaveStateBridgeKit"])
     ],
     dependencies: [
         // Named, so the dependency resolves however the repo folder is named
@@ -25,7 +34,7 @@ let package = Package(
         .target(
             name: "SaveStateBridgeKit",
             dependencies: [
-                .product(name: "SaveStateProtocol", package: "SaveState"),
+                .product(name: "SaveStateClientKit", package: "SaveState"),
                 .product(name: "MCP", package: "swift-sdk")
             ]
         ),

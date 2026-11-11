@@ -1,31 +1,29 @@
 import Foundation
 import MCP
-import SaveStateProtocol
+import SaveStateClientKit
 
 /// The MCP tools: what they advertise, and what each call does.
-public struct BridgeTools: Sendable {
-    private let discover: @Sendable () throws -> [DiscoveredApp]
-    private let timeout: Duration
+package struct BridgeTools: Sendable {
+    private let discover: @Sendable () async throws -> [DiscoveredApp]
+    private let client: SaveStateClient
 
     /// Creates the tools.
     ///
     /// - Parameters:
     ///   - timeout: How long to wait for an app to answer.
     ///   - discover: Returns the running apps. Defaults to the booted simulators.
-    public init(
+    package init(
         timeout: Duration = .seconds(30),
-        discover: @escaping @Sendable () throws -> [DiscoveredApp] = {
-            AppDiscovery.apps(on: try AppDiscovery.bootedDevices())
-        }
+        discover: @escaping @Sendable () async throws -> [DiscoveredApp] = AppDiscovery.runningApps
     ) {
-        self.timeout = timeout
+        client = SaveStateClient(timeout: timeout)
         self.discover = discover
     }
 
     // MARK: - Advertising
 
     /// The tools the server advertises.
-    public static let definitions: [Tool] = [
+    package static let definitions: [Tool] = [
         Tool(
             name: "savestate_list_apps",
             description: "List running iOS Simulator apps that use SaveState.",
@@ -147,7 +145,7 @@ public struct BridgeTools: Sendable {
     // MARK: - Calling
 
     /// Runs a tool. Failures come back as an error result the agent can read.
-    public func call(_ name: String, arguments: [String: Value]) async -> CallTool.Result {
+    package func call(_ name: String, arguments: [String: Value]) async -> CallTool.Result {
         do {
             return CallTool.Result(content: [.text(text: try await perform(name, arguments), annotations: nil, _meta: nil)])
         } catch let error as BridgeError {
@@ -195,7 +193,7 @@ public struct BridgeTools: Sendable {
         else { return }
         let unknown = arguments.keys.filter { !allowed.contains($0) }.sorted()
         guard unknown.isEmpty else {
-            throw BridgeError("""
+            throw BridgeError(.invalidArgument, """
             \(name) doesn't take \(unknown.joined(separator: ", ")). It takes: \(allowed.sorted().joined(separator: ", ")).
             """)
         }
@@ -207,7 +205,7 @@ public struct BridgeTools: Sendable {
         case "savestate_list_apps":
             return try encode(try matchingApps(arguments, in: try await runningApps()).map(AppListing.init))
         case "savestate_describe":
-            return try encode(try await registry(of: try await selectApp(arguments)))
+            return try encode(try await client.describe(try await selectApp(arguments)))
         case "savestate_read":
             return try await read(arguments)
         case "savestate_wait":
@@ -216,37 +214,37 @@ public struct BridgeTools: Sendable {
             return try await set(arguments)
         case "savestate_run_action":
             let key = try string("key", in: arguments)
-            try expectDone(try await send(.runAction(key: key), to: try await selectApp(arguments)))
+            try await client.runAction(key, in: try await selectApp(arguments))
             return "Ran the action \"\(key)\"."
         case "savestate_apply_scenario":
             let key = try string("key", in: arguments)
-            try expectDone(try await send(.applyScenario(key: key), to: try await selectApp(arguments)))
+            try await client.applyScenario(key, in: try await selectApp(arguments))
             return "Applied the scenario \"\(key)\"."
         default:
-            throw BridgeError("There's no tool named \(name).")
+            throw BridgeError(.invalidArgument, "There's no tool named \(name).")
         }
     }
 
     private func set(_ arguments: [String: Value]) async throws -> String {
         let key = try string("key", in: arguments)
         guard let json = arguments["value"] else {
-            throw BridgeError("savestate_set needs a value.")
+            throw BridgeError(.invalidArgument, "savestate_set needs a value.")
         }
         var persist = false
         if let value = arguments["persist"] {
             guard let flag = value.boolValue else {
-                throw BridgeError("persist must be true or false.")
+                throw BridgeError(.invalidArgument, "persist must be true or false.")
             }
             persist = flag
         }
         let app = try await selectApp(arguments)
-        let description = try await registry(of: app)
+        let description = try await client.describe(app)
         guard let control = description.controls.first(where: { $0.key == key }) else {
             let keys = description.controls.map(\.key).joined(separator: ", ")
-            throw BridgeError("No control has the key \"\(key)\". The controls are: \(keys).")
+            throw BridgeError(.unknownKey, "No control has the key \"\(key)\". The controls are: \(keys).")
         }
         let value = try ControlValueConversion.value(from: json, kind: control.kind)
-        try expectDone(try await send(.set(key: key, value: value, persist: persist), to: app))
+        try await client.set(key, to: value, persist: persist, in: app)
         switch (persist, control.requiresRelaunch) {
         case (true, true):
             return "Set \"\(key)\". Relaunch the app to apply it. It persists across relaunches until reset."
@@ -265,16 +263,12 @@ public struct BridgeTools: Sendable {
         let key = try string("key", in: arguments)
         let app = try await selectApp(arguments)
         do {
-            let result = try await send(.read(key: key), to: app)
-            guard case .control(let control) = result else { throw unexpected(result) }
-            return try encode(control)
+            return try encode(try await client.read(key, in: app))
         } catch let error as WireError where error.code == .unknownControl {
             do {
-                let result = try await send(.readProbe(key: key), to: app)
-                guard case .probe(let probe) = result else { throw unexpected(result) }
-                return try encode(probe)
+                return try encode(try await client.readProbe(key, in: app))
             } catch let error as WireError where error.code == .unknownProbe {
-                throw BridgeError("""
+                throw BridgeError(.unknownKey, """
                 No control or probe has the key "\(key)". Call savestate_describe to see the keys.
                 """)
             }
@@ -285,54 +279,25 @@ public struct BridgeTools: Sendable {
         let key = try string("key", in: arguments)
         let wait = try WaitArguments(arguments)
         let app = try await selectApp(arguments)
-        let result: WireResult
         do {
-            // The app answers when the wait ends, so the bridge has to outlast it.
-            result = try await send(
-                .wait(key: key, condition: wait.condition, timeoutMilliseconds: wait.milliseconds),
-                to: app,
-                timeout: max(timeout, .milliseconds(wait.milliseconds) + WaitArguments.slack)
+            let probe = try await client.wait(
+                forProbe: key,
+                until: wait.condition,
+                timeout: .milliseconds(wait.milliseconds),
+                in: app
             )
+            return try encode(probe)
         } catch let error as WireError where error.code == .unknownProbe {
             // Waiting on a control is a likely mistake, so say so rather than that the key is missing.
-            guard case .control? = try? await send(.read(key: key), to: app) else { throw error }
-            throw BridgeError("""
+            guard (try? await client.read(key, in: app)) != nil else { throw error }
+            throw BridgeError(.invalidArgument, """
             "\(key)" is a control, not a probe. savestate_wait waits only on probes; read a control with savestate_read.
             """)
         }
-        guard case .probe(let probe) = result else { throw unexpected(result) }
-        return try encode(probe)
     }
 
-    private func registry(of app: DiscoveredApp) async throws -> RegistryDescription {
-        let result = try await send(.describe, to: app)
-        guard case .description(let description) = result else { throw unexpected(result) }
-        return description
-    }
-
-    private func send(_ request: WireRequest, to app: DiscoveredApp, timeout: Duration? = nil) async throws -> WireResult {
-        let result = try await AppClient.send(request, to: app, timeout: timeout ?? self.timeout)
-        if case .failure(let error) = result { throw error }
-        return result
-    }
-
-    private func expectDone(_ result: WireResult) throws {
-        guard case .done = result else { throw unexpected(result) }
-    }
-
-    private func unexpected(_ result: WireResult) -> BridgeError {
-        BridgeError("The app sent an unexpected response: \(result)")
-    }
-
-    /// Runs discovery away from Swift's shared thread pool, because it blocks on
-    /// `simctl`.
     private func runningApps() async throws -> [DiscoveredApp] {
-        let discover = discover
-        return try await withCheckedThrowingContinuation { continuation in
-            DispatchQueue.global().async {
-                continuation.resume(with: Result { try discover() })
-            }
-        }
+        try await discover()
     }
 
     private func matchingApps(_ arguments: [String: Value], in running: [DiscoveredApp]) throws -> [DiscoveredApp] {
@@ -347,7 +312,7 @@ public struct BridgeTools: Sendable {
     private func selectApp(_ arguments: [String: Value]) async throws -> DiscoveredApp {
         let running = try await runningApps()
         guard !running.isEmpty else {
-            throw BridgeError("""
+            throw BridgeError(.appNotFound, """
             No SaveState apps are running. Launch a Debug build in a booted simulator, and check that it \
             calls AgentEndpoint.start(registry:).
             """)
@@ -357,23 +322,18 @@ public struct BridgeTools: Sendable {
             .map { "\($0.endpoint.bundleIdentifier) on \($0.deviceIdentifier)" }
             .joined(separator: ", ")
         guard let app = matches.first else {
-            throw BridgeError("No running app matches. Running: \(listing).")
+            throw BridgeError(.appNotFound, "No running app matches. Running: \(listing).")
         }
         guard matches.count == 1 else {
-            throw BridgeError("Several apps match, so pass app or device. Running: \(listing).")
+            throw BridgeError(.ambiguousApp, "Several apps match, so pass app or device. Running: \(listing).")
         }
-        guard app.endpoint.protocolVersion == WireProtocol.version else {
-            throw BridgeError("""
-            \(app.endpoint.appName) speaks protocol \(app.endpoint.protocolVersion), and this bridge speaks \
-            \(WireProtocol.version). Rebuild the app and the bridge from the same SaveState version.
-            """)
-        }
+        // SaveStateClient checks the app's protocol version on every call.
         return app
     }
 
     private func string(_ name: String, in arguments: [String: Value]) throws -> String {
         guard let value = try optionalString(name, in: arguments) else {
-            throw BridgeError("This tool needs \(name).")
+            throw BridgeError(.invalidArgument, "This tool needs \(name).")
         }
         return value
     }
@@ -381,7 +341,7 @@ public struct BridgeTools: Sendable {
     private func optionalString(_ name: String, in arguments: [String: Value]) throws -> String? {
         guard let value = arguments[name] else { return nil }
         guard let text = value.stringValue else {
-            throw BridgeError("\(name) must be a string.")
+            throw BridgeError(.invalidArgument, "\(name) must be a string.")
         }
         return text
     }
@@ -412,7 +372,7 @@ private struct AppListing: Encodable {
 enum ControlValueConversion {
     static func value(from json: Value, kind: ControlKind) throws -> ControlValue {
         guard let value = convert(json, kind: kind), let normalized = kind.normalize(value) else {
-            throw BridgeError("\(article(for: kind)) \(name(of: kind)) control can't take \(describe(json)). It takes \(accepted(by: kind)).")
+            throw BridgeError(.invalidArgument, "\(article(for: kind)) \(name(of: kind)) control can't take \(describe(json)). It takes \(accepted(by: kind)).")
         }
         return normalized
     }
@@ -462,7 +422,7 @@ enum ControlValueConversion {
         case .null, .array, .object:
             break
         }
-        throw BridgeError("""
+        throw BridgeError(.invalidArgument, """
         value can't be \(describe(json)). It takes true or false, a number, a string, or a date-time with \
         a time zone, such as 2027-01-15T08:00:00Z.
         """)
@@ -525,9 +485,7 @@ struct WaitArguments {
     /// The timeout when the agent doesn't pass one.
     static let defaultSeconds = 10
     /// The longest timeout the app accepts.
-    static let maximumSeconds = 30
-    /// How much longer than the wait the bridge waits for the app's answer.
-    static let slack: Duration = .seconds(5)
+    static let maximumSeconds = Int(SaveStateClient.maximumWaitTimeout.components.seconds)
 
     /// What to wait for.
     var condition: ProbeCondition
@@ -536,10 +494,10 @@ struct WaitArguments {
 
     init(_ arguments: [String: Value]) throws {
         guard let name = arguments["condition"] else {
-            throw BridgeError("savestate_wait needs a condition: \(Self.conditionNames.joined(separator: ", ")).")
+            throw BridgeError(.invalidArgument, "savestate_wait needs a condition: \(Self.conditionNames.joined(separator: ", ")).")
         }
         guard let json = arguments["value"] else {
-            throw BridgeError("savestate_wait needs a value to compare with.")
+            throw BridgeError(.invalidArgument, "savestate_wait needs a value to compare with.")
         }
         let value = try ControlValueConversion.probeValue(from: json)
         switch name.stringValue {
@@ -548,7 +506,7 @@ struct WaitArguments {
         case "atLeast": condition = .atLeast(value: value)
         case "atMost": condition = .atMost(value: value)
         default:
-            throw BridgeError("condition must be one of: \(Self.conditionNames.joined(separator: ", ")).")
+            throw BridgeError(.invalidArgument, "condition must be one of: \(Self.conditionNames.joined(separator: ", ")).")
         }
         milliseconds = try Self.milliseconds(arguments["timeoutSeconds"])
     }
@@ -568,7 +526,7 @@ struct WaitArguments {
             seconds = .nan
         }
         guard seconds > 0, seconds <= Double(maximumSeconds) else {
-            throw BridgeError("timeoutSeconds must be a number more than 0 and at most \(maximumSeconds).")
+            throw BridgeError(.invalidArgument, "timeoutSeconds must be a number more than 0 and at most \(maximumSeconds).")
         }
         // Rounded to the nearest, since `2.007 * 1000` is a hair over 2007, with a
         // floor of 1 so a tiny timeout still waits rather than becoming zero.
