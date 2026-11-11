@@ -162,6 +162,9 @@ relaunching applies it once. The overlay persists its changes; agents choose.
 
 - `SaveState`, `SaveStateUI`, `SaveStateAgent`, `SaveStateProtocol`: the
   app-facing Swift package, with no third-party dependencies.
+- `SaveStateClientKit`: a macOS-only client for Mac tools that drive running
+  apps. Add this repository's root package by URL and depend on this product.
+  It compiles to nothing on iOS, and app targets shouldn't depend on it.
 - `savestate`: a Mac CLI and MCP server for coding agents, in `CLI/`. Install it
   with `brew install tjb/tap/savestate`.
 

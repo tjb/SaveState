@@ -1,3 +1,5 @@
+// The client runs on a Mac and compiles to nothing on iOS.
+#if os(macOS)
 import Foundation
 import SaveStateProtocol
 
@@ -14,7 +16,7 @@ enum AppClient {
         timeout: Duration
     ) async throws -> WireResult {
         guard let url = URL(string: "ws://127.0.0.1:\(app.endpoint.port)") else {
-            throw BridgeError("The app's endpoint file has a bad port.")
+            throw BridgeError(.unreachable, "The app's endpoint file has a bad port.")
         }
         let task = session.webSocketTask(with: url)
         task.resume()
@@ -33,12 +35,13 @@ enum AppClient {
             group.addTask {
                 try await Task.sleep(for: timeout)
                 throw BridgeError(
+                    .noResponse,
                     "\(app.endpoint.appName) didn't answer in time. It may be suspended: bring it to the foreground."
                 )
             }
             defer { group.cancelAll() }
             guard let result = try await group.next() else {
-                throw BridgeError("The request ended without a result.")
+                throw BridgeError(.noResponse, "The request ended without a result.")
             }
             return result
         }
@@ -62,7 +65,7 @@ enum AppClient {
             let response = try await receive(ResponseEnvelope.self, over: task)
             guard response.id == identifier else {
                 if case .failure(let error) = response.result { throw error }
-                throw BridgeError("The app answered a different request.")
+                throw BridgeError(.unexpectedResponse, "The app answered a different request.")
             }
             return response.result
         } catch let error as BridgeError {
@@ -73,11 +76,13 @@ enum AppClient {
             throw CancellationError()
         } catch is DecodingError {
             throw BridgeError(
-                "\(app.endpoint.appName) sent a reply the bridge can't read. Rebuild the app and the bridge from the same SaveState version."
+                .unreadableReply,
+                "\(app.endpoint.appName) sent a reply this tool can't read. Rebuild the app and this tool from the same SaveState version."
             )
         } catch {
             // A closed socket arrives as a POSIX error, a refused one as a URLError.
             throw BridgeError(
+                .unreachable,
                 "Couldn't reach \(app.endpoint.appName): \(error.localizedDescription) It may have quit: relaunch it."
             )
         }
@@ -98,7 +103,8 @@ enum AppClient {
         case .data(let data):
             return try JSONDecoder().decode(type, from: data)
         @unknown default:
-            throw BridgeError("The app sent a message the bridge can't read.")
+            throw BridgeError(.unreadableReply, "The app sent a message this tool can't read.")
         }
     }
 }
+#endif

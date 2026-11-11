@@ -1,7 +1,8 @@
+#if os(macOS)
 import Foundation
 import SaveStateProtocol
 import Testing
-@testable import SaveStateBridgeKit
+@testable import SaveStateClientKit
 
 /// A fake simulator's data folder, removed when the test ends.
 private final class FakeSimulator: Sendable {
@@ -88,6 +89,34 @@ struct AppDiscoveryTests {
         #expect(AppDiscovery.apps(on: [simulator.device]).isEmpty)
     }
 
+    /// The port is open, so only the process check can be why it's skipped.
+    @Test func aStaleFileFromADeadProcessIsSkipped() async throws {
+        let listener = try await FakeEndpoint(.neverUpgrades)
+        let simulator = FakeSimulator()
+        try simulator.write(info(port: listener.port, processIdentifier: Int32.max))
+
+        #expect(AppDiscovery.apps(on: [simulator.device]).isEmpty)
+    }
+
+    /// This process is alive, so only the port check can be why it's skipped.
+    @Test func aReusedProcessIdentifierWithAClosedPortIsSkipped() async throws {
+        let listener = try await FakeEndpoint(.neverUpgrades)
+        let simulator = FakeSimulator()
+        try simulator.write(info(port: listener.port))
+        #expect(AppDiscovery.apps(on: [simulator.device]).count == 1)
+        listener.stop()
+
+        // A listener closes asynchronously, so the port may stay open for a moment.
+        var apps = AppDiscovery.apps(on: [simulator.device])
+        var waited = Duration.zero
+        while !apps.isEmpty, waited < .seconds(3) {
+            try await Task.sleep(for: .milliseconds(25))
+            waited += .milliseconds(25)
+            apps = AppDiscovery.apps(on: [simulator.device])
+        }
+        #expect(apps.isEmpty)
+    }
+
     @Test func aProcessThisUserCantSignalStillCountsAsRunning() async throws {
         let listener = try await FakeEndpoint(.neverUpgrades)
         let simulator = FakeSimulator()
@@ -134,9 +163,10 @@ struct AppDiscoveryTests {
         #expect(devices.map(\.identifier) == ["A", "B", "C"])
     }
 
-    @Test func aMissingExecutableThrowsRatherThanHanging() {
-        #expect(throws: (any Error).self) {
-            _ = try AppDiscovery.runTool(URL(fileURLWithPath: "/nonexistent/tool"), arguments: [])
+    @Test func aMissingExecutableThrowsRatherThanHanging() async {
+        await #expect(throws: (any Error).self) {
+            _ = try await AppDiscovery.runTool(URL(fileURLWithPath: "/nonexistent/tool"), arguments: [])
         }
     }
 }
+#endif

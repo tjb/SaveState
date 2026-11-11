@@ -1,24 +1,25 @@
 import MCP
-import SaveStateProtocol
+import SaveStateClientKit
 
 /// The Mac-side bridge: discovers running SaveState apps and serves the
 /// SaveState MCP tools to coding agents.
 ///
-/// This is a library rather than part of the CLI executable so a future
-/// Mac app can link the same logic.
-public enum Bridge {
+/// It's `package` rather than `public`, along with ``BridgeTools``, so the
+/// SaveStateBridgeKit library's public API never includes the MCP SDK's types:
+/// other tools depend on ``SaveStateClient``, and the SDK can change freely.
+package enum Bridge {
     /// The bridge version.
-    public static let version = "0.1.0"
+    package static let version = "0.1.0"
 
     /// The wire protocol version the bridge speaks to app endpoints.
-    public static let protocolVersion = WireProtocol.version
+    package static let protocolVersion = WireProtocol.version
 
     /// Runs an MCP server over stdio until the client disconnects.
     ///
     /// It serves `savestate_list_apps`, `savestate_describe`, `savestate_set`,
     /// `savestate_run_action`, `savestate_apply_scenario`, `savestate_read`, and
     /// `savestate_wait`.
-    public static func runMCPServer(tools: BridgeTools = BridgeTools()) async throws {
+    package static func runMCPServer(tools: BridgeTools = BridgeTools()) async throws {
         try await serve(tools: tools, over: StdioTransport())
     }
 

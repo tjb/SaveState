@@ -98,6 +98,18 @@ struct WaitToolTests {
         #expect(text(result).contains("Pending uploads"))
     }
 
+    @Test func theBridgeOutlastsTheWaitByTheSlack() async throws {
+        var arguments = atLeastFive
+        arguments["timeoutSeconds"] = 1
+        // After the wait's own timeout, within its slack.
+        let slow = FakeEndpoint.Behavior.replies(after: .seconds(2)) { _ in .probe(probe: sampleProbe) }
+
+        let (result, _) = try await wait(arguments, timeout: .milliseconds(500), behavior: slow)
+
+        #expect(result.isError != true, "\(text(result))")
+        #expect(text(result).contains("Pending uploads"))
+    }
+
     @Test func otherToolsStillTimeOutOnTheBridgesTimeout() async throws {
         // The same slow app, so the test above proves the wait's own timeout.
         let slow = FakeEndpoint.Behavior.replies(after: .milliseconds(1500)) { _ in .probe(probe: sampleProbe) }
