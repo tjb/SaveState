@@ -17,6 +17,10 @@ BUNDLE = "dev.tjb.SaveStateDemo"
 # Long enough for a slow boot, and short enough to report a hung simulator rather than
 # run into the job's timeout.
 RETRY_SECONDS = 300
+# How long after sending a wait to apply the scenario it waits for. The bridge finds
+# the app with simctl before the wait's clock starts, which takes about 200 ms locally
+# and over a second on CI.
+SEED_DELAY_SECONDS = 3
 
 
 class Server:
@@ -52,6 +56,21 @@ class Server:
 
     def notify(self, method):
         self._send({"jsonrpc": "2.0", "method": method})
+
+    def start(self):
+        self.request(
+            "initialize",
+            {
+                "protocolVersion": "2025-06-18",
+                "capabilities": {},
+                "clientInfo": {"name": "check-mcp-simulator", "version": "0"},
+            },
+        )
+        self.notify("notifications/initialized")
+
+    def stop(self):
+        self.process.stdin.close()
+        self.process.terminate()
 
     def call(self, name, **arguments):
         result = self.request("tools/call", {"name": name, "arguments": arguments})
@@ -91,32 +110,62 @@ def timed_call(server, name, **arguments):
     return failed, text, round((time.monotonic() - start) * 1000)
 
 
-def check_wait_timing(server):
-    """Checks savestate_wait through the real server, and that it reports its timing.
+def check_wait_timing(server, path):
+    """Checks that savestate_wait wakes on a change, through the real server.
 
-    The seed-projects scenario counts item-count up from 0 to 5, one every 100 ms.
-    This doesn't prove the wait woke on observation rather than its 100 ms tick, or
-    that it had to wait at all: the bridge runs simctl to find the app before each
-    wait starts its clock, which takes about 200 ms locally and can outlast the whole
-    500 ms climb on CI, so the count may already be met. ProbeWaitTests proves the
-    observation wake with a 10 s tick, so this only checks the timing is reported
-    and plausible.
+    The wait starts before seed-projects runs, which counts item-count up from 0 to
+    5, one every 100 ms. The scenario goes through a second server, because the
+    first is busy with the wait. The bridge finds the app with simctl before a
+    wait's clock starts, so the scenario is applied a few seconds after the wait is
+    sent, and the check proves from waitedMilliseconds that the wait's clock had
+    started before the scenario was applied.
     """
     before = read_value(server, "item-count")
-    expect(before is not None and before.get("type") == "int", "it reads the item-count probe", before)
-
-    failed, text = server.call("savestate_apply_scenario", app=BUNDLE, key="seed-projects")
-    expect(not failed, "it applies seed-projects", text)
-    met_failed, met_text, met_wall = timed_call(
-        server,
-        "savestate_wait",
-        app=BUNDLE,
-        key="item-count",
-        condition="atLeast",
-        value=3,
-        timeoutSeconds=5,
+    expect(
+        before is not None and before.get("type") == "int" and before.get("value", 3) < 3,
+        "item-count starts below 3",
+        before,
     )
+
+    waiting = {}
+
+    def wait():
+        waiting["result"] = timed_call(
+            server,
+            "savestate_wait",
+            app=BUNDLE,
+            key="item-count",
+            condition="atLeast",
+            value=3,
+            timeoutSeconds=SEED_DELAY_SECONDS + 5,
+        )
+        waiting["ended"] = time.monotonic()
+
+    wait_sent = time.monotonic()
+    waiter = threading.Thread(target=wait)
+    waiter.start()
+    time.sleep(SEED_DELAY_SECONDS)
+
+    seeder = Server(path)
+    seeder.start()
+    seed_sent = time.monotonic()
+    failed, text = seeder.call("savestate_apply_scenario", app=BUNDLE, key="seed-projects")
+    seed_returned = time.monotonic()
+    seeder.stop()
+    expect(not failed, "it applies seed-projects while the wait runs", text)
+    expect("ended" not in waiting, "the wait was still running when the scenario returned")
+
+    waiter.join(timeout=SEED_DELAY_SECONDS + 30)
+    expect("result" in waiting, "the wait returned")
+    met_failed, met_text, met_wall = waiting["result"]
     met = json.loads(met_text) if not met_failed else {}
+    waited = met.get("waitedMilliseconds")
+    # When the wait's clock started, as seen from here. The response's trip back only
+    # moves this later, so a start before seed_sent proves the wait was already running.
+    clock_started = waiting["ended"] - (waited or 0) / 1000
+    # The scenario has run by the time its call returns; the third project arrives
+    # about 300 ms after that.
+    after_seed = round((waiting["ended"] - seed_returned) * 1000)
 
     missed_failed, missed_text, missed_wall = timed_call(
         server,
@@ -131,13 +180,15 @@ def check_wait_timing(server):
     missed_waited = int(match.group(1)) if match else None
 
     print("----- BEGIN savestate_wait timing -----")
-    print(f"item-count before seed-projects: {json.dumps(before)}")
+    print(f"item-count before the wait: {json.dumps(before)}")
     print()
-    print("savestate_wait item-count atLeast 3 (timeoutSeconds 5)")
+    print(f"savestate_wait item-count atLeast 3 (timeoutSeconds {SEED_DELAY_SECONDS + 5}), sent first")
+    print(f"seed-projects applied {round((seed_sent - wait_sent) * 1000)} ms after the wait was sent")
+    print(f"and returned {round((seed_returned - seed_sent) * 1000)} ms later")
+    print(f"wait's clock started {round((seed_sent - clock_started) * 1000)} ms before seed-projects was applied")
+    print(f"wait returned {after_seed} ms after seed-projects returned")
     print(f"isError: {met_failed}; whole call: {met_wall} ms")
     print(met_text)
-    if not met_failed:
-        print(f"finding the app and the round trip: {met_wall - met.get('waitedMilliseconds', 0)} ms")
     print()
     print("savestate_wait item-count equals 999 (timeoutSeconds 1)")
     print(f"isError: {missed_failed}; whole call: {missed_wall} ms")
@@ -147,8 +198,10 @@ def check_wait_timing(server):
     expect(not met_failed, "the wait for at least 3 projects succeeds", met_text)
     # Seeding stops at 5, so more means a cancelled run added a project.
     expect(3 <= met.get("value", {}).get("value", -1) <= 5, "the wait returns a count from 3 to 5", met_text)
-    waited = met.get("waitedMilliseconds")
-    expect(isinstance(waited, int) and waited < 1000, "the wait woke within a second", met_text)
+    expect(isinstance(waited, int), "the wait reports waitedMilliseconds", met_text)
+    expect(clock_started < seed_sent, "the wait was waiting before seed-projects was applied", met_text)
+    expect(waiting["ended"] > seed_returned, "the wait returned after seed-projects ran")
+    expect(after_seed < 1000, "the wait woke within a second of seed-projects returning", f"{after_seed} ms")
 
     expect(missed_failed and "didn't meet the condition" in missed_text, "a wait for 999 times out", missed_text)
     expect(
@@ -161,15 +214,7 @@ def check_wait_timing(server):
 def main():
     path, udid = sys.argv[1], sys.argv[2]
     server = Server(path)
-    server.request(
-        "initialize",
-        {
-            "protocolVersion": "2025-06-18",
-            "capabilities": {},
-            "clientInfo": {"name": "check-mcp-simulator", "version": "0"},
-        },
-    )
-    server.notify("notifications/initialized")
+    server.start()
 
     tools = {tool["name"] for tool in server.request("tools/list", {})["tools"]}
     expect(
@@ -222,7 +267,7 @@ def main():
     expect(not failed and "this launch" in text, "it sets a control", text)
     expect(read_value(server, "project-limit") == {"type": "int", "value": 9}, "the app holds the new value")
 
-    check_wait_timing(server)
+    check_wait_timing(server, path)
 
     if len(sys.argv) > 3:
         subprocess.run(["xcrun", "simctl", "io", udid, "screenshot", sys.argv[3]], check=True)
@@ -233,8 +278,7 @@ def main():
         "a session write is gone after a relaunch",
     )
 
-    server.process.stdin.close()
-    server.process.terminate()
+    server.stop()
 
 
 if __name__ == "__main__":
