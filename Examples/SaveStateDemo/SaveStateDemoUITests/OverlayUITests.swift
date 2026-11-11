@@ -233,6 +233,38 @@ final class OverlayUITests: XCTestCase {
         XCTAssertTrue(element("demo.trial").waitForExistence(timeout: 15))
     }
 
+    /// Waits for an element's accessibility value, which is how probe rows
+    /// report what they show.
+    private func waitForValue(_ value: String, of target: XCUIElement, timeout: TimeInterval = 15) -> Bool {
+        let shows = XCTNSPredicateExpectation(predicate: NSPredicate(format: "value == %@", value), object: target)
+        return XCTWaiter.wait(for: [shows], timeout: timeout) == .completed
+    }
+
+    func testProbeRowShowsItsValueAndUpdatesLive() {
+        let identifier = "saveState.probe.item-count"
+        scroll(to: identifier)
+        let row = element(identifier)
+        XCTAssertEqual(row.label, "Projects")
+        expectValue("0", of: row)
+
+        scroll(to: "saveState.scenario.seed-projects")
+        app.buttons["saveState.scenario.seed-projects"].tap()
+        XCTAssertTrue(element("saveState.message").waitForExistence(timeout: 15))
+
+        // The panel stays open, so the row has to redraw on its own as the count
+        // climbs. It isn't scrolled back to: `scroll(to:)` only moves forward, and
+        // the panel's stack isn't lazy, so the row keeps its value off screen.
+        expectValue("5", of: row)
+    }
+
+    /// Fails unless the element comes to show the value, keeping the screen and
+    /// hierarchy first so a failure on CI can be diagnosed.
+    private func expectValue(_ value: String, of target: XCUIElement) {
+        guard !waitForValue(value, of: target) else { return }
+        recordState(named: "Probe never showed \(value)")
+        XCTFail("The probe showed \(String(describing: target.value)), not \(value)")
+    }
+
     /// Holds the panel open so `simctl io` can capture it. Runs only when
     /// xcodebuild is given `TEST_RUNNER_SAVESTATE_HOLD_SECONDS`.
     func testHoldPanelOpenForScreenshot() throws {

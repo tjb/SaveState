@@ -11,6 +11,7 @@ private final class PanelState {
     var count = 1
     var name = "start"
     var ranKeys: [String] = []
+    var pending = 0
 }
 
 private struct Boom: Error, CustomStringConvertible {
@@ -85,6 +86,13 @@ private final class Fixture {
         r.action("Erase", key: "erase", destructive: true) { state.ranKeys.append("erase") }
         r.scenario("Trial", key: "trial") { model in model.flag = true }
         r.scenario("Broken", key: "broken") { _ in throw Boom() }
+        r.section("Sync") {
+            r.probe("Pending", key: "pending") { state.pending }
+        }
+        r.probe("Ready", key: "ready") { state.flag }
+        r.section("Sync") {
+            r.probe("Screen", key: "screen") { state.name }
+        }
     }
 
     func control(_ key: String) throws -> ControlDescription {
@@ -498,4 +506,74 @@ struct PanelDisabledTests {
         #expect(fixture.state.ranKeys.isEmpty)
         #expect(fixture.runState.message == disabledMessage())
     }
+}
+
+@Suite("Panel probes")
+@MainActor
+struct PanelProbeTests {
+    @Test func probesGroupBySectionInDeclarationOrder() {
+        let fixture = Fixture()
+
+        let groups = fixture.model.probeGroups(fixture.registry.describe().probes)
+
+        #expect(groups.map(\.title) == ["Sync", nil])
+        #expect(groups.map { $0.items.map(\.probe.key) } == [["pending", "screen"], ["ready"]])
+    }
+
+    @Test func noProbesMeansNoGroups() {
+        #expect(Fixture().model.probeGroups([]).isEmpty)
+    }
+
+    @Test func rowsShowTheValuesTheRegistryReadsNow() throws {
+        let fixture = Fixture()
+        let model = fixture.model
+        func values() -> [String: String] {
+            let rows = model.probeGroups(fixture.registry.describe().probes).flatMap(\.items)
+            return Dictionary(uniqueKeysWithValues: rows.map { ($0.probe.key, $0.valueText) })
+        }
+        #expect(values() == ["pending": "0", "ready": "Off", "screen": "start"])
+
+        fixture.state.pending = 3
+        try fixture.registry.set(.bool(true), forKey: "flag")
+
+        #expect(values() == ["pending": "3", "ready": "On", "screen": "start"])
+    }
+
+    /// The panel's body reads `describe()`, so this is what redraws a probe row
+    /// without a timer.
+    @Test func readingTheProbesObservesTheirState() {
+        let fixture = Fixture()
+        let changed = Flag()
+
+        withObservationTracking {
+            _ = fixture.model.probeGroups(fixture.registry.describe().probes)
+        } onChange: {
+            changed.set()
+        }
+        fixture.state.pending = 1
+
+        #expect(changed.isSet)
+    }
+
+    @Test func theLocaleAndTimeZoneReachEveryRow() throws {
+        let fixture = Fixture()
+        let probe = ProbeDescription(key: "progress", label: "Progress", section: nil, value: .double(0.5))
+
+        let row = try #require(
+            fixture.model.probeGroups([probe], locale: Locale(identifier: "de_DE"), timeZone: .gmt).first?.items.first
+        )
+
+        #expect(row.valueText == "0,5")
+        #expect(row.timeZone == .gmt)
+    }
+}
+
+/// Set from an observation callback, which may run off the main actor.
+private final class Flag: @unchecked Sendable {
+    private let lock = NSLock()
+    private var value = false
+
+    var isSet: Bool { lock.withLock { value } }
+
+    func set() { lock.withLock { value = true } }
 }

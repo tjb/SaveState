@@ -243,7 +243,9 @@ public final class RegistryBuilder<Model: AnyObject> {
     ///
     /// `read` runs on the main actor each time the probe is read, so keep it
     /// cheap. When it reads an `@Observable` model, waits and the overlay see
-    /// changes at once. Otherwise waits check it every 100 ms.
+    /// changes at once. Otherwise waits check it every 100 ms, and the overlay
+    /// shows the new value the next time its panel redraws, such as after a
+    /// change or when it reopens. The overlay runs no timer to poll probes.
     public func probe(_ label: String, key: String, _ read: @escaping @MainActor () -> Bool) {
         addProbe(key: key, label: label) { .bool(read()) }
     }

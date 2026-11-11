@@ -90,7 +90,8 @@ package struct BridgeTools: Sendable {
         Tool(
             name: "savestate_wait",
             description: """
-            Wait until a probe meets a condition, then return the probe with the value that met it. \
+            Wait until a probe meets a condition, then return the probe with the value that met it, \
+            plus waitedMilliseconds: how long the app took to answer, not counting finding the app. \
             Use it after an action or scenario starts work that finishes later. equals and notEquals \
             take true or false, a number, or a string; atLeast and atMost take a number, or a date-time \
             with a time zone, such as 2027-01-15T08:00:00Z, for date probes. Fails if the condition \
@@ -279,6 +280,9 @@ package struct BridgeTools: Sendable {
         let key = try string("key", in: arguments)
         let wait = try WaitArguments(arguments)
         let app = try await selectApp(arguments)
+        // Timed around the exchange only, so finding the app doesn't count.
+        let clock = ContinuousClock()
+        let start = clock.now
         do {
             let probe = try await client.wait(
                 forProbe: key,
@@ -286,7 +290,11 @@ package struct BridgeTools: Sendable {
                 timeout: .milliseconds(wait.milliseconds),
                 in: app
             )
-            return try encode(probe)
+            let waited = WaitArguments.milliseconds(of: start.duration(to: clock.now))
+            return try encode(TimedProbe(probe: probe, waitedMilliseconds: waited))
+        } catch let error as WireError where error.code == .timedOut {
+            let waited = WaitArguments.milliseconds(of: start.duration(to: clock.now))
+            throw TimedOutWait(message: "\(message(for: error)) The wait took \(waited) ms.")
         } catch let error as WireError where error.code == .unknownProbe {
             // Waiting on a control is a likely mistake, so say so rather than that the key is missing.
             guard (try? await client.read(key, in: app)) != nil else { throw error }
@@ -365,6 +373,30 @@ private struct AppListing: Encodable {
         appName = app.endpoint.appName
         device = app.deviceIdentifier
         protocolVersion = app.endpoint.protocolVersion
+    }
+}
+
+/// A wait the app ended because the condition wasn't met in time. The message
+/// is the app's, with the bridge's advice and how long the wait took.
+private struct TimedOutWait: Error, CustomStringConvertible {
+    var message: String
+    var description: String { message }
+}
+
+/// A probe as `savestate_wait` returns it: the probe's own fields, plus how
+/// long the wait took.
+private struct TimedProbe: Encodable {
+    var probe: ProbeDescription
+    var waitedMilliseconds: Int
+
+    private enum CodingKeys: String, CodingKey {
+        case waitedMilliseconds
+    }
+
+    func encode(to encoder: any Encoder) throws {
+        try probe.encode(to: encoder)
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        try container.encode(waitedMilliseconds, forKey: .waitedMilliseconds)
     }
 }
 
@@ -509,6 +541,12 @@ struct WaitArguments {
             throw BridgeError(.invalidArgument, "condition must be one of: \(Self.conditionNames.joined(separator: ", ")).")
         }
         milliseconds = try Self.milliseconds(arguments["timeoutSeconds"])
+    }
+
+    /// A measured duration in whole milliseconds, rounded to the nearest.
+    static func milliseconds(of duration: Duration) -> Int {
+        let (seconds, attoseconds) = duration.components
+        return Int(seconds) * 1000 + Int((Double(attoseconds) / 1e15).rounded())
     }
 
     /// Rejects a timeout out of range rather than clamping it, so an agent never
