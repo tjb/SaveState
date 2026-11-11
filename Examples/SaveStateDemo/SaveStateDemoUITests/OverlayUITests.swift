@@ -48,7 +48,9 @@ final class OverlayUITests: XCTestCase {
         app.descendants(matching: .any)[identifier].firstMatch
     }
 
-    /// Drags the panel's content until the element sits in its visible band.
+    /// Drags the panel's content until the element sits in its visible band. Each
+    /// drag holds still before lifting, so the content doesn't fling past the
+    /// element, and it drags back down if the element ends up above the band.
     private func scroll(to identifier: String) {
         let target = element(identifier)
         let top = app.buttons["saveState.resetAll"].frame.maxY + 40
@@ -56,12 +58,16 @@ final class OverlayUITests: XCTestCase {
         func isVisible() -> Bool {
             target.exists && target.frame.minY > top && target.frame.maxY < bottom
         }
-        let start = app.coordinate(withNormalizedOffset: CGVector(dx: 0.22, dy: 0.0))
+        let lower = app.coordinate(withNormalizedOffset: CGVector(dx: 0.22, dy: 0.0))
             .withOffset(CGVector(dx: 0, dy: bottom - 20))
-        let end = app.coordinate(withNormalizedOffset: CGVector(dx: 0.22, dy: 0.0))
+        let upper = app.coordinate(withNormalizedOffset: CGVector(dx: 0.22, dy: 0.0))
             .withOffset(CGVector(dx: 0, dy: top + 80))
-        for _ in 0..<8 where !isVisible() {
-            start.press(forDuration: 0.05, thenDragTo: end)
+        for _ in 0..<10 where !isVisible() {
+            // An element that isn't laid out yet, or sits below the band, needs the
+            // content dragged up; one above the band needs it dragged down.
+            let isAbove = target.exists && target.frame.minY <= top
+            let (start, end) = isAbove ? (upper, lower) : (lower, upper)
+            start.press(forDuration: 0.05, thenDragTo: end, withVelocity: .slow, thenHoldForDuration: 0.3)
         }
         XCTAssertTrue(isVisible(), "\(identifier) isn't reachable")
     }
