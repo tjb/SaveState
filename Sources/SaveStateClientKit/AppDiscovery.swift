@@ -98,9 +98,9 @@ public enum AppDiscovery {
     static func runTool(
         _ executable: URL,
         arguments: [String],
-        deadline: TimeInterval = 40
+        deadline: TimeInterval = 40,
+        launch: ToolLaunch = ToolLaunch()
     ) async throws -> Data {
-        let launch = ToolLaunch()
         return try await withTaskCancellationHandler {
             try await withCheckedThrowingContinuation { continuation in
                 DispatchQueue.global().async {
@@ -216,7 +216,7 @@ private struct SimulatorListing: Decodable {
 /// Starts a tool unless its task was already cancelled, and stops it if the
 /// task is cancelled later. A process can't be stopped before it starts, so
 /// both happen under one lock.
-private final class ToolLaunch: Sendable {
+final class ToolLaunch: Sendable {
     private enum State {
         case waiting
         case running(Process)
@@ -224,6 +224,15 @@ private final class ToolLaunch: Sendable {
     }
 
     private let state = Mutex(State.waiting)
+
+    /// Whether the tool has started and hasn't been cancelled. Tests wait for it
+    /// before cancelling, so they cancel a tool that's really running.
+    var isRunning: Bool {
+        state.withLock { state in
+            if case .running = state { return true }
+            return false
+        }
+    }
 
     var isCancelled: Bool {
         state.withLock { state in

@@ -20,6 +20,16 @@ struct ViewVisibilityTests {
         }
     }
 
+    private func registryWithProbes() -> SaveStateRegistry {
+        SaveStateRegistry(model: Model(), store: .discarding, isEnabled: true) { r in
+            r.toggle("On", key: "on", \.isOn)
+            r.section("Sync") {
+                r.probe("Count", key: "count") { 2 }
+                r.probe("Ready", key: "ready") { true }
+            }
+        }
+    }
+
     private func size(of view: some View) -> CGSize {
         let host = NSHostingView(rootView: view)
         host.layoutSubtreeIfNeeded()
@@ -40,6 +50,13 @@ struct ViewVisibilityTests {
 
     @Test func anEnabledRegistrysPanelShowsItsControls() {
         #expect(size(of: SaveStatePanel(registry: registry(isEnabled: true))).height > 0)
+    }
+
+    @Test func aPanelShowsItsProbes() {
+        let without = size(of: SaveStatePanel(registry: registry(isEnabled: true))).height
+        let with = size(of: SaveStatePanel(registry: registryWithProbes())).height
+
+        #expect(with > without)
     }
 }
 #endif

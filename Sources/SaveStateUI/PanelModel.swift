@@ -101,6 +101,27 @@ struct PanelModel {
         "Run \(session.actionToConfirm?.label ?? "action")?"
     }
 
+    // MARK: - Probes
+
+    /// The probes as the panel lists them: grouped by the section each was
+    /// declared in, the way actions and scenarios are, in declaration order.
+    ///
+    /// The panel reads values from `registry.describe()` as it draws, so a probe
+    /// that reads observable state updates live. Other probes show their new
+    /// value the next time the panel redraws, such as after a change or when it
+    /// reopens. The panel runs no timer of its own, so it never keeps the app
+    /// from going idle.
+    func probeGroups(
+        _ probes: [ProbeDescription],
+        locale: Locale = .current,
+        timeZone: TimeZone = .current
+    ) -> [OverlayGroup<ProbeRowModel>] {
+        OverlayGroup.grouping(
+            probes.map { ProbeRowModel(probe: $0, locale: locale, timeZone: timeZone) },
+            section: \.probe.section
+        )
+    }
+
     // MARK: - Changing
 
     /// Writes a value from an editor. Changes made in the panel persist.
@@ -198,4 +219,58 @@ struct PanelModel {
             }
         }
     }
+}
+
+/// One probe's read-only row: its label, its value as text, and the
+/// identifiers UI tests find it by.
+struct ProbeRowModel {
+    let probe: ProbeDescription
+    var locale: Locale = .current
+    var timeZone: TimeZone = .current
+    /// Where the panel's own words are translated: the host app's, as for `Text`.
+    var bundle: Bundle = .main
+
+    /// The value as the row shows it. Numbers and dates follow the locale the
+    /// way control editors do; a decimal shows no grouping separator.
+    var valueText: String {
+        switch probe.value {
+        case .bool(let flag):
+            return flag ? "On" : "Off"
+        case .int, .double:
+            return ControlText.text(for: probe.value, locale: locale)
+        case .string(let text):
+            return text.isEmpty ? "Empty" : text
+        case .date(let date):
+            var style = Date.FormatStyle(date: .abbreviated, time: .shortened, locale: locale)
+            style.timeZone = timeZone
+            return date.formatted(style)
+        case .null:
+            return "Not set"
+        }
+    }
+
+    /// Whether the value is a word the panel supplies, such as On, rather than
+    /// the app's own data, so a host app's translations apply to it.
+    var isPanelWord: Bool {
+        switch probe.value {
+        case .bool, .null: return true
+        case .string(let text): return text.isEmpty
+        case .int, .double, .date: return false
+        }
+    }
+
+    /// The value as SwiftUI shows it: a localization key for the panel's own
+    /// words, and verbatim text for the app's data.
+    var valueKey: LocalizedStringKey? {
+        isPanelWord ? LocalizedStringKey(valueText) : nil
+    }
+
+    /// The row's accessibility value: the shown text, already resolved to a
+    /// plain string with the panel's own words translated, so UI tests and
+    /// VoiceOver never see an unresolved localized `Text`.
+    var accessibilityValue: String {
+        isPanelWord ? String(localized: String.LocalizationValue(valueText), bundle: bundle) : valueText
+    }
+
+    var rowIdentifier: String { "saveState.probe.\(probe.key)" }
 }

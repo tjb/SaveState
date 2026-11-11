@@ -35,3 +35,8 @@ func describedControl(
         isChanged: isChanged
     )
 }
+
+/// Builds a probe's description directly, for testing models that only read one.
+func describedProbe(key: String = "probe", section: String? = nil, value: ControlValue) -> ProbeDescription {
+    ProbeDescription(key: key, label: key, section: section, value: value)
+}

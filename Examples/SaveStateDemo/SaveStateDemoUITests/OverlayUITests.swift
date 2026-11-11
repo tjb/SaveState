@@ -48,7 +48,9 @@ final class OverlayUITests: XCTestCase {
         app.descendants(matching: .any)[identifier].firstMatch
     }
 
-    /// Drags the panel's content until the element sits in its visible band.
+    /// Drags the panel's content until the element sits in its visible band. Each
+    /// drag holds still before lifting, so the content doesn't fling past the
+    /// element, and it drags back down if the element ends up above the band.
     private func scroll(to identifier: String) {
         let target = element(identifier)
         let top = app.buttons["saveState.resetAll"].frame.maxY + 40
@@ -56,12 +58,16 @@ final class OverlayUITests: XCTestCase {
         func isVisible() -> Bool {
             target.exists && target.frame.minY > top && target.frame.maxY < bottom
         }
-        let start = app.coordinate(withNormalizedOffset: CGVector(dx: 0.22, dy: 0.0))
+        let lower = app.coordinate(withNormalizedOffset: CGVector(dx: 0.22, dy: 0.0))
             .withOffset(CGVector(dx: 0, dy: bottom - 20))
-        let end = app.coordinate(withNormalizedOffset: CGVector(dx: 0.22, dy: 0.0))
+        let upper = app.coordinate(withNormalizedOffset: CGVector(dx: 0.22, dy: 0.0))
             .withOffset(CGVector(dx: 0, dy: top + 80))
-        for _ in 0..<8 where !isVisible() {
-            start.press(forDuration: 0.05, thenDragTo: end)
+        for _ in 0..<10 where !isVisible() {
+            // An element that isn't laid out yet, or sits below the band, needs the
+            // content dragged up; one above the band needs it dragged down.
+            let isAbove = target.exists && target.frame.minY <= top
+            let (start, end) = isAbove ? (upper, lower) : (lower, upper)
+            start.press(forDuration: 0.05, thenDragTo: end, withVelocity: .slow, thenHoldForDuration: 0.3)
         }
         XCTAssertTrue(isVisible(), "\(identifier) isn't reachable")
     }
@@ -231,6 +237,38 @@ final class OverlayUITests: XCTestCase {
         app.buttons["saveState.resetAll"].tap()
         closePanel()
         XCTAssertTrue(element("demo.trial").waitForExistence(timeout: 15))
+    }
+
+    /// Waits for an element's accessibility value, which is how probe rows
+    /// report what they show.
+    private func waitForValue(_ value: String, of target: XCUIElement, timeout: TimeInterval = 15) -> Bool {
+        let shows = XCTNSPredicateExpectation(predicate: NSPredicate(format: "value == %@", value), object: target)
+        return XCTWaiter.wait(for: [shows], timeout: timeout) == .completed
+    }
+
+    func testProbeRowShowsItsValueAndUpdatesLive() {
+        let identifier = "saveState.probe.item-count"
+        scroll(to: identifier)
+        let row = element(identifier)
+        XCTAssertEqual(row.label, "Projects")
+        expectValue("0", of: row)
+
+        scroll(to: "saveState.scenario.seed-projects")
+        app.buttons["saveState.scenario.seed-projects"].tap()
+        XCTAssertTrue(element("saveState.message").waitForExistence(timeout: 15))
+
+        // The panel stays open, so the row has to redraw on its own as the count
+        // climbs. It isn't scrolled back to: `scroll(to:)` only moves forward, and
+        // the panel's stack isn't lazy, so the row keeps its value off screen.
+        expectValue("5", of: row)
+    }
+
+    /// Fails unless the element comes to show the value, keeping the screen and
+    /// hierarchy first so a failure on CI can be diagnosed.
+    private func expectValue(_ value: String, of target: XCUIElement) {
+        guard !waitForValue(value, of: target) else { return }
+        recordState(named: "Probe never showed \(value)")
+        XCTFail("The probe showed \(String(describing: target.value)), not \(value)")
     }
 
     /// Holds the panel open so `simctl io` can capture it. Runs only when

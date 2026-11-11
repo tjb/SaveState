@@ -264,6 +264,7 @@ struct BridgeToolsTests {
 
         #expect(int.isError != true, "\(text(int))")
         #expect(text(int).contains("\"value\" : 5"), "\(text(int))")
+        #expect(text(int).contains("\"waitedMilliseconds\" : "), "\(text(int))")
         #expect(double.isError != true, "\(text(double))")
     }
 
@@ -293,6 +294,8 @@ struct BridgeToolsTests {
         #expect(text(result).contains("didn't meet the condition within 200 ms"), "\(text(result))")
         #expect(text(result).contains("savestate_read"))
         #expect(text(result).contains("longer timeoutSeconds"))
+        let match = try #require(text(result).firstMatch(of: /The wait took (\d+) ms\.$/), "\(text(result))")
+        #expect(try #require(Int(match.1)) >= 200, "\(text(result))")
     }
 
     @Test func aConditionThatCantApplySaysWhichDo() async throws {

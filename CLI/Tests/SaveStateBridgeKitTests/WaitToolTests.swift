@@ -134,6 +134,86 @@ struct WaitToolTests {
         #expect(result.isError != true, "\(text(result))")
     }
 
+    // MARK: - How long it took
+
+    /// The result's JSON as a dictionary, and the probe decoded from it.
+    private func timedResult(_ result: CallTool.Result) throws -> (fields: [String: Any], probe: ProbeDescription) {
+        let data = Data(text(result).utf8)
+        let fields = try #require(try JSONSerialization.jsonObject(with: data) as? [String: Any])
+        return (fields, try JSONDecoder().decode(ProbeDescription.self, from: data))
+    }
+
+    @Test func aMetWaitReportsHowLongItTookAlongsideTheProbe() async throws {
+        let slow = FakeEndpoint.Behavior.replies(after: .milliseconds(300)) { _ in .probe(probe: sampleProbe) }
+
+        let (result, _) = try await wait(atLeastFive, behavior: slow)
+
+        #expect(result.isError != true, "\(text(result))")
+        let (fields, probe) = try timedResult(result)
+        #expect(probe == sampleProbe)
+        #expect(Set(fields.keys) == ["key", "label", "value", "waitedMilliseconds"])
+        let waited = try #require(fields["waitedMilliseconds"] as? Int)
+        #expect(waited >= 300, "\(waited)")
+        #expect(waited < 3000, "\(waited)")
+    }
+
+    @Test func findingTheAppDoesntCountTowardTheWait() async throws {
+        let endpoint = try await FakeEndpoint(.replies { _ in .probe(probe: sampleProbe) })
+        let app = endpoint.app()
+        let tools = BridgeTools(timeout: .seconds(5)) {
+            try await Task.sleep(for: .milliseconds(600))
+            return [app]
+        }
+
+        let result = await tools.call("savestate_wait", arguments: atLeastFive)
+
+        #expect(result.isError != true, "\(text(result))")
+        let waited = try #require(try timedResult(result).fields["waitedMilliseconds"] as? Int)
+        #expect(waited < 600, "\(waited)")
+    }
+
+    @Test func aTimedOutWaitEndsWithHowLongItTook() async throws {
+        let timedOut = WireError(code: .timedOut, message: "The probe \"pending\" didn't meet the condition within 1000 ms.")
+        let slow = FakeEndpoint.Behavior.replies(after: .milliseconds(300)) { _ in .failure(error: timedOut) }
+
+        let (result, _) = try await wait(atLeastFive, behavior: slow)
+
+        #expect(result.isError == true)
+        let message = text(result)
+        #expect(message.hasPrefix(timedOut.message), "\(message)")
+        #expect(message.contains("longer timeoutSeconds"), "\(message)")
+        let match = try #require(message.firstMatch(of: /The wait took (\d+) ms\.$/), "\(message)")
+        let waited = try #require(Int(match.1))
+        #expect(waited >= 300, "\(message)")
+        #expect(waited < 3000, "\(message)")
+    }
+
+    @Test func otherWaitFailuresDontReportATime() async throws {
+        let invalid = WireError(code: .invalidCondition, message: "Can't apply.")
+
+        let (result, _) = try await wait(atLeastFive, behavior: .replies { _ in .failure(error: invalid) })
+
+        #expect(result.isError == true)
+        #expect(!text(result).contains("The wait took"), "\(text(result))")
+    }
+
+    @Test(arguments: [
+        (Duration.zero, 0),
+        (.milliseconds(1500), 1500),
+        (.microseconds(1499), 1),
+        (.microseconds(1500), 2),
+        (.seconds(2) + .microseconds(400), 2000)
+    ])
+    func measuredTimesRoundToWholeMilliseconds(duration: Duration, milliseconds: Int) {
+        #expect(WaitArguments.milliseconds(of: duration) == milliseconds)
+    }
+
+    @Test func theDescriptionMentionsWaitedMilliseconds() throws {
+        let tool = try #require(BridgeTools.definitions.first { $0.name == "savestate_wait" })
+
+        #expect(tool.description?.contains("waitedMilliseconds") == true)
+    }
+
     // MARK: - Arguments
 
     @Test(arguments: [

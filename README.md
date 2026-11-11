@@ -88,7 +88,7 @@ it on for QA or TestFlight builds.
 ### The overlay
 
 Attach the overlay at your app's root to get a floating ladybug button that
-opens a panel of every control, action, and scenario:
+opens a panel of every control, probe, action, and scenario:
 
 ```swift
 import SaveStateUI
@@ -98,6 +98,8 @@ ContentView()
 ```
 
 It shows nothing when the registry is disabled. Destructive actions ask first.
+Probes appear read-only under Probes. One that reads an `@Observable` model
+updates live; any other shows its new value when the panel next redraws.
 [`Examples/SaveStateDemo`](Examples/SaveStateDemo) is a small app you can run.
 
 ### The agent endpoint

@@ -1,7 +1,12 @@
 import SaveState
 import SwiftUI
 
-/// The debug panel: every control in a registry, then its actions and scenarios.
+/// The debug panel: every control in a registry, its probes, then its actions
+/// and scenarios.
+///
+/// Probes are read-only. A probe that reads an `@Observable` model updates live;
+/// any other probe shows its new value the next time the panel redraws, such as
+/// after a change or when the panel reopens.
 ///
 /// ``SaveStateOverlay`` presents it in a popover. It has a fixed width and scrolls
 /// its own content, so if you present it yourself, use a popover or sheet rather
@@ -42,6 +47,7 @@ public struct SaveStatePanel: View {
             ScrollView {
                 VStack(alignment: .leading, spacing: 16) {
                     controls(description.controls)
+                    probes(description.probes)
                     actions(description.actions)
                     scenarios(description.scenarios)
                 }
@@ -134,6 +140,42 @@ public struct SaveStatePanel: View {
                 }
             }
         }
+    }
+
+    @ViewBuilder
+    private func probes(_ probes: [ProbeDescription]) -> some View {
+        if !probes.isEmpty {
+            VStack(alignment: .leading, spacing: 8) {
+                sectionHeader("Probes")
+                ForEach(model.probeGroups(probes)) { group in
+                    if let title = group.title {
+                        Text(title).font(.footnote).foregroundStyle(.secondary)
+                    }
+                    ForEach(group.items, id: \.probe.key) { row in
+                        probeRow(row)
+                    }
+                }
+            }
+        }
+    }
+
+    /// A read-only row. It's one accessibility element whose value is the
+    /// probe's, so UI tests read the value rather than matching text.
+    private func probeRow(_ row: ProbeRowModel) -> some View {
+        let value = row.valueKey.map { Text($0) } ?? Text(verbatim: row.valueText)
+        return HStack(alignment: .firstTextBaseline) {
+            Text(row.probe.label)
+                .font(.subheadline)
+            Spacer(minLength: 8)
+            value
+                .font(.subheadline.monospacedDigit())
+                .foregroundStyle(.secondary)
+                .multilineTextAlignment(.trailing)
+        }
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel(Text(verbatim: row.probe.label))
+        .accessibilityValue(row.accessibilityValue)
+        .accessibilityIdentifier(row.rowIdentifier)
     }
 
     @ViewBuilder
