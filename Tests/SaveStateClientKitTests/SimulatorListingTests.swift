@@ -26,10 +26,15 @@ struct SimulatorListingTests {
 
     @Test func cancellingTheTaskStopsARunningTool() async {
         let start = ContinuousClock.now
+        let launch = ToolLaunch()
         let run = Task {
-            try await AppDiscovery.runTool(URL(fileURLWithPath: "/bin/sleep"), arguments: ["30"])
+            try await AppDiscovery.runTool(URL(fileURLWithPath: "/bin/sleep"), arguments: ["30"], launch: launch)
         }
-        try? await Task.sleep(for: .milliseconds(300))
+        // Cancel only once the tool runs, or this would test a tool that never started.
+        while !launch.isRunning, ContinuousClock.now - start < .seconds(5) {
+            try? await Task.sleep(for: .milliseconds(10))
+        }
+        #expect(launch.isRunning)
 
         run.cancel()
 
