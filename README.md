@@ -15,8 +15,8 @@ serves it over MCP for agents, in Debug builds only.
 The demo app driven by the real `savestate mcp` server. The left side shows each
 tool call with a shortened result.
 
-> **Status:** v0.1.0 is released, and v0.2 is in progress on `main`: probes and
-> `savestate_wait` have shipped. APIs can change before 1.0.
+> **Status:** v0.2, an early release. It adds probes, `savestate_wait`, and a public
+> client for Mac tools. APIs can change before 1.0.
 
 ## Why
 
@@ -30,7 +30,7 @@ SaveState gives every state a name and a reproducible path.
 Add the package in Xcode (File > Add Package Dependencies), or in `Package.swift`:
 
 ```swift
-.package(url: "https://github.com/tjb/SaveState", from: "0.1.0")
+.package(url: "https://github.com/tjb/SaveState", from: "0.2.0")
 ```
 
 Then add the products your app target uses:

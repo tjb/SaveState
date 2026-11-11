@@ -9,7 +9,7 @@ import SaveStateClientKit
 /// other tools depend on ``SaveStateClient``, and the SDK can change freely.
 package enum Bridge {
     /// The bridge version.
-    package static let version = "0.1.0"
+    package static let version = "0.2.0"
 
     /// The wire protocol version the bridge speaks to app endpoints.
     package static let protocolVersion = WireProtocol.version

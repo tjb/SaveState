@@ -3,9 +3,9 @@
 Notable changes to SaveState. Versions follow
 [Semantic Versioning](https://semver.org), and APIs can change before 1.0.
 
-## Unreleased
+## 0.2.0 - 2026-11-10
 
-Work toward 0.2:
+Probes, waits, and a public client for Mac tools:
 
 - Probes: read-only Bool, Int, Double, String, and Date values the app reports,
   declared with `r.probe(_:key:_:)`. Probes share one key space with controls.
