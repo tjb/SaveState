@@ -247,6 +247,11 @@ overlay, though, shows a probe's new value only when its panel next redraws.
 - iOS 18+ / macOS 15+
 - Swift 6.2+ (Xcode 26+)
 
+Build with Xcode's toolchain. Xcode 26.6 and Xcode 27.2 are known good. The
+swift.org toolchains aren't: with 6.4.2, `SaveStateClientKit`'s tests hang
+([#27](https://github.com/tjb/SaveState/issues/27)), and 6.2.4 doesn't build. If
+you use swiftly, `swiftly use xcode` selects Xcode's toolchain.
+
 ## Contributing and security
 
 See [CONTRIBUTING.md](CONTRIBUTING.md) to work on SaveState and
