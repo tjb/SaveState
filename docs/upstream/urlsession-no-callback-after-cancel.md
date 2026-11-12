@@ -1,39 +1,10 @@
-# Draft upstream issue: URLSession never calls back after cancel under the swift.org 6.4.2 Swift Testing runner
+# Upstream issue: URLSession never calls back after cancel under the swift.org 6.4.2 Swift Testing runner
 
-**Status:** draft, not filed. It comes from SaveState
-[#27](https://github.com/tjb/SaveState/issues/27). It's for
-[swiftlang/swift-testing](https://github.com/swiftlang/swift-testing/issues), with a
-link from swiftlang/swift-package-manager if the maintainers say the test host
-belongs there.
+**Status:** filed as [swiftlang/swift-testing#2032](https://github.com/swiftlang/swift-testing/issues/2032).
+It comes from SaveState [#27](https://github.com/tjb/SaveState/issues/27).
 
-**Existing reports:** none found. On 2026-11-11 I searched swiftlang/swift-testing,
-swiftlang/swift-package-manager, swiftlang/swift, swiftlang/swift-foundation and
-swiftlang/swift-corelibs-foundation for these terms:
-
-- `Testing.framework`
-- `libTesting.dylib`
-- `lib_TestingInterop`
-- `loaded twice`
-- `two copies`
-- `duplicate Testing`
-- `swiftpm-testing-helper`
-- `URLSession`
-- `URLSessionWebSocketTask`
-- `swiftly`
-- `CFMainExecutor`
-- `completion handler never called`
-
-The closest matches are related but not the same bug:
-
-- [swiftlang/swift#91716](https://github.com/swiftlang/swift/issues/91716) (open):
-  in a Swift Testing host, `CFMainExecutor` drives the main run loop, and a stopped
-  run loop exits the process early. It's the same host and executor, but the
-  symptom is the opposite: an early exit, not a missing callback.
-- [swiftlang/swift-testing#937](https://github.com/swiftlang/swift-testing/issues/937)
-  (closed): a build failure caused by stale copies of Swift Testing from a package
-  dependency.
-
-Everything below the line is the issue text.
+Everything below the line is the issue text. The filed issue also ends with a
+Related section linking swiftlang/swift#91716.
 
 ---
 
