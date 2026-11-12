@@ -2,6 +2,7 @@
 #if os(macOS)
 import Foundation
 import SaveStateProtocol
+import Synchronization
 
 /// Sends one request to an app's endpoint and returns its result.
 ///
@@ -20,49 +21,66 @@ enum AppClient {
         }
         let task = session.webSocketTask(with: url)
         task.resume()
-        defer { task.cancel(with: .normalClosure, reason: nil) }
+        return try await send(request, over: WebSocket(task: task), app: app, timeout: timeout)
+    }
 
-        return try await withThrowingTaskGroup(of: WireResult.self) { group in
-            group.addTask {
-                // The socket ignores task cancellation, and the group can't return
-                // until this finishes, so cancelling has to reach the socket.
-                try await withTaskCancellationHandler {
-                    try await exchange(request, over: task, app: app)
-                } onCancel: {
-                    task.cancel(with: .normalClosure, reason: nil)
-                }
+    /// Runs one exchange over `socket` and returns as soon as it ends, the timeout
+    /// passes, or the caller is cancelled, whichever comes first.
+    ///
+    /// The timeout is hard: it never waits for the socket to finish a pending send or
+    /// receive after closing it. URLSession doesn't always call back for a cancelled
+    /// WebSocket task (issue #27), so waiting for that could hang the call forever.
+    /// The abandoned exchange ends in the background whenever the socket lets it.
+    static func send(
+        _ request: WireRequest,
+        over socket: some AppSocket,
+        app: DiscoveredApp,
+        timeout: Duration
+    ) async throws -> WireResult {
+        let outcome = FirstOutcome<WireResult>()
+        let exchange = Task {
+            do {
+                outcome.finish(.success(try await exchange(request, over: socket, app: app)))
+            } catch {
+                outcome.finish(.failure(error))
             }
-            group.addTask {
-                try await Task.sleep(for: timeout)
-                throw BridgeError(
-                    .noResponse,
-                    "\(app.endpoint.appName) didn't answer in time. It may be suspended: bring it to the foreground."
-                )
-            }
-            defer { group.cancelAll() }
-            guard let result = try await group.next() else {
-                throw BridgeError(.noResponse, "The request ended without a result.")
-            }
-            return result
+        }
+        let timer = Task {
+            // A cancelled sleep means the call already ended another way.
+            guard (try? await Task.sleep(for: timeout)) != nil else { return }
+            outcome.finish(.failure(BridgeError(
+                .noResponse,
+                "\(app.endpoint.appName) didn't answer in time. It may be suspended: bring it to the foreground."
+            )))
+        }
+        defer {
+            timer.cancel()
+            exchange.cancel()
+            socket.close()
+        }
+        return try await withTaskCancellationHandler {
+            try await outcome.value
+        } onCancel: {
+            outcome.finish(.failure(CancellationError()))
         }
     }
 
     private static func exchange(
         _ request: WireRequest,
-        over task: URLSessionWebSocketTask,
+        over socket: some AppSocket,
         app: DiscoveredApp
     ) async throws -> WireResult {
         do {
             try await send(
                 ClientHello(protocolVersion: WireProtocol.version, token: app.endpoint.token),
-                over: task
+                over: socket
             )
-            if case .rejected(let error) = try await receive(ServerHello.self, over: task) {
+            if case .rejected(let error) = try await receive(ServerHello.self, over: socket) {
                 throw error
             }
             let identifier = 1
-            try await send(RequestEnvelope(id: identifier, request: request), over: task)
-            let response = try await receive(ResponseEnvelope.self, over: task)
+            try await send(RequestEnvelope(id: identifier, request: request), over: socket)
+            let response = try await receive(ResponseEnvelope.self, over: socket)
             guard response.id == identifier else {
                 if case .failure(let error) = response.result { throw error }
                 throw BridgeError(.unexpectedResponse, "The app answered a different request.")
@@ -88,22 +106,89 @@ enum AppClient {
         }
     }
 
-    private static func send(_ message: some Encodable, over task: URLSessionWebSocketTask) async throws {
-        let text = String(bytes: try JSONEncoder().encode(message), encoding: .utf8) ?? ""
-        try await task.send(.string(text))
+    private static func send(_ message: some Encodable, over socket: some AppSocket) async throws {
+        try await socket.send(String(bytes: try JSONEncoder().encode(message), encoding: .utf8) ?? "")
     }
 
     private static func receive<Message: Decodable>(
         _ type: Message.Type,
-        over task: URLSessionWebSocketTask
+        over socket: some AppSocket
     ) async throws -> Message {
-        switch try await task.receive() {
+        switch try await socket.receive() {
         case .string(let text):
             return try JSONDecoder().decode(type, from: Data(text.utf8))
         case .data(let data):
             return try JSONDecoder().decode(type, from: data)
         @unknown default:
             throw BridgeError(.unreadableReply, "The app sent a message this tool can't read.")
+        }
+    }
+}
+
+/// The connection one request travels over. In use it's a URLSession WebSocket;
+/// tests swap in sockets that misbehave in ways a real server can't arrange.
+protocol AppSocket: Sendable {
+    /// Sends one text frame.
+    func send(_ text: String) async throws
+    /// Waits for the next frame.
+    func receive() async throws -> URLSessionWebSocketTask.Message
+    /// Closes the connection once the request is over, however it ended. A pending
+    /// send or receive should then fail, but nothing waits for it to.
+    func close()
+}
+
+/// A URLSession WebSocket task as an `AppSocket`.
+struct WebSocket: AppSocket {
+    let task: URLSessionWebSocketTask
+
+    func send(_ text: String) async throws {
+        try await task.send(.string(text))
+    }
+
+    func receive() async throws -> URLSessionWebSocketTask.Message {
+        try await task.receive()
+    }
+
+    func close() {
+        task.cancel(with: .normalClosure, reason: nil)
+    }
+}
+
+/// Hands the first of several racing outcomes to one waiter and drops the rest.
+final class FirstOutcome<Value: Sendable>: Sendable {
+    private enum State {
+        case pending(CheckedContinuation<Value, any Error>?)
+        case finished(Result<Value, any Error>)
+    }
+
+    private let state = Mutex(State.pending(nil))
+
+    /// Settles the outcome, unless an earlier call already did.
+    func finish(_ result: Result<Value, any Error>) {
+        // The waiter, if one is already waiting. A later one finds the result itself.
+        let waiter: CheckedContinuation<Value, any Error>? = state.withLock { state in
+            guard case .pending(let waiter) = state else { return nil }
+            state = .finished(result)
+            return waiter
+        }
+        waiter?.resume(with: result)
+    }
+
+    /// The first outcome, waiting for one if none has arrived yet. Read it once.
+    var value: Value {
+        get async throws {
+            try await withCheckedThrowingContinuation { continuation in
+                let settled: Result<Value, any Error>? = state.withLock { state in
+                    switch state {
+                    case .pending:
+                        state = .pending(continuation)
+                        return nil
+                    case .finished(let result):
+                        return result
+                    }
+                }
+                if let settled { continuation.resume(with: settled) }
+            }
         }
     }
 }

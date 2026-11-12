@@ -3,6 +3,15 @@
 Notable changes to SaveState. Versions follow
 [Semantic Versioning](https://semver.org), and APIs can change before 1.0.
 
+## 0.2.1 - 2026-11-11
+
+- `SaveStateClient`'s timeout is hard. When it passes, or the caller is cancelled,
+  the call throws at once and the socket finishes closing in the background.
+  Before, the call waited for URLSession to acknowledge the cancelled socket, and
+  under the swift.org 6.4.2 toolchain's Swift Testing runner that never happens,
+  so the call hung ([#27](https://github.com/tjb/SaveState/issues/27)). The
+  bridge, and so `savestate mcp`, gets the same fix.
+
 ## 0.2.0 - 2026-11-10
 
 Probes, waits, and a public client for Mac tools:
