@@ -30,7 +30,7 @@ SaveState gives every state a name and a reproducible path.
 Add the package in Xcode (File > Add Package Dependencies), or in `Package.swift`:
 
 ```swift
-.package(url: "https://github.com/tjb/SaveState", from: "0.2.0")
+.package(url: "https://github.com/tjb/SaveState", from: "0.2.1")
 ```
 
 Then add the products your app target uses:
@@ -248,9 +248,11 @@ overlay, though, shows a probe's new value only when its panel next redraws.
 - Swift 6.2+ (Xcode 26+)
 
 Build with Xcode's toolchain. Xcode 26.6 and Xcode 27.2 are known good. The
-swift.org toolchains aren't: with 6.4.2, `SaveStateClientKit`'s tests hang
-([#27](https://github.com/tjb/SaveState/issues/27)), and 6.2.4 doesn't build. If
-you use swiftly, `swiftly use xcode` selects Xcode's toolchain.
+swift.org toolchains aren't: 6.2.4 doesn't build, and under 6.4.2 Swift Testing's
+runner never gets URLSession's callback for a cancelled WebSocket
+([#27](https://github.com/tjb/SaveState/issues/27)). Since 0.2.1 the client's
+timeout no longer waits for that callback, so the tests pass there too, but CI
+uses Xcode. If you use swiftly, `swiftly use xcode` selects Xcode's toolchain.
 
 ## Contributing and security
 
