@@ -1,4 +1,4 @@
-# Draft upstream issue: Swift Testing under a swift.org toolchain on macOS loads two copies of Swift Testing, and URLSession never calls back for a cancelled WebSocket send
+# Draft upstream issue: URLSession never calls back after cancel under the swift.org 6.4.2 Swift Testing runner
 
 **Status:** draft, not filed. It comes from SaveState
 [#27](https://github.com/tjb/SaveState/issues/27). It's for
@@ -52,9 +52,6 @@ The same code behaves correctly in three other setups:
 
 In each of them, the completion handler runs within milliseconds with
 `NSURLErrorDomain -999 "cancelled"`.
-
-The hung test process loads two copies of Swift Testing: the toolchain's
-`libTesting.dylib` and Xcode's `Testing.framework`.
 
 ## Environment
 
@@ -247,7 +244,11 @@ Thread_2
 lldb can attach, but `language swift task list` finds no tasks in this process.
 `swift-inspect dump-concurrency` needs root.
 
-## Two copies of Swift Testing
+## Observation: swift.org builds load two copies of Swift Testing
+
+Both swift.org-built test processes load two copies of Swift Testing, including
+the XCTest run, which passes. So the duplicate alone doesn't cause the hang.
+Whether it plays any part is an open question, discussed below.
 
 `vmmap` of each test process, lines that mention Testing:
 
