@@ -26,8 +26,8 @@ done <<< "$tests"
 echo "Rerunning:"
 echo "$tests"
 rerun_log="$(mktemp)"
-xcodebuild test-without-building "$@" "${args[@]}" 2>&1 | tee "$rerun_log"
-status=${PIPESTATUS[0]}
+status=0
+bash "$(dirname "$0")/run-ui-tests.sh" "$rerun_log" test-without-building "$@" "${args[@]}" || status=$?
 [[ "$status" == 0 ]] || exit "$status"
 
 # xcodebuild succeeds when a filter matches nothing, so count what actually ran.

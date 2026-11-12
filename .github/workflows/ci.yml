@@ -37,6 +37,9 @@ jobs:
           "$RUNNER_TEMP/swiftlint/swiftlint" lint --strict --reporter github-actions-logging
       - name: Check that the custom rules fire
         run: bash .github/scripts/check-lint-rules.sh "$RUNNER_TEMP/swiftlint/swiftlint"
+      - name: Check that the UI test wrapper stops a stuck run
+        timeout-minutes: 3
+        run: bash .github/scripts/check-run-ui-tests.sh
 
   package:
     name: Package (macOS)
@@ -115,6 +118,12 @@ jobs:
         # restarts the test runner instead of retrying when a test has an async setUp
         # and stops at its first failure. A test that only passes on the rerun leaves
         # a warning on the run, because it can be a real intermittent bug.
+        #
+        # A hang fails in minutes rather than at the job's limit. Each test gets 3
+        # minutes; run-ui-tests.sh stops xcodebuild after 5 silent minutes, or as soon
+        # as the test runner fails to start, and neither of those is rerun. A green
+        # step takes about 16 minutes, and the step's own limit backs all of this up.
+        timeout-minutes: 30
         run: |
           udid="$(xcrun simctl list devices available -j | python3 -c "
           import json, sys
@@ -127,9 +136,19 @@ jobs:
             -scheme SaveStateDemo
             -destination "id=$udid"
             -derivedDataPath "$RUNNER_TEMP/demo"
+            -test-timeouts-enabled YES
+            -default-test-execution-time-allowance 180
+            -maximum-test-execution-time-allowance 180
           )
-          xcodebuild test "${args[@]}" 2>&1 | tee demo.log; status=${PIPESTATUS[0]}
+          xcrun simctl boot "$udid" 2>/dev/null || true
+          xcrun simctl bootstatus "$udid" -b
+          status=0
+          bash .github/scripts/run-ui-tests.sh demo.log test "${args[@]}" || status=$?
           grep -h 'savestate-missed-tap:' demo.log | sed 's/^/::warning::/' || true
+          # 3: the runner didn't start. 4: xcodebuild went quiet. Neither is a test failure.
+          if [[ "$status" == 3 || "$status" == 4 ]]; then
+            exit "$status"
+          fi
           if [[ "$status" != 0 ]]; then
             bash "$GITHUB_WORKSPACE/.github/scripts/annotate-errors.sh" demo.log
             bash .github/scripts/rerun-failed-ui-tests.sh demo.log SaveStateDemoUITests "${args[@]}"
@@ -143,6 +162,8 @@ jobs:
           path: ${{ runner.temp }}/demo/Logs/Test/*.xcresult
           retention-days: 7
       - name: Drive the demo through the MCP server
+        # A green step takes about 5 minutes, most of it building the CLI.
+        timeout-minutes: 12
         run: |
           (cd CLI && swift build)
           xcrun simctl bootstatus "$udid" -b
