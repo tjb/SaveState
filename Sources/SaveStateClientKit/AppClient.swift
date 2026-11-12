@@ -38,14 +38,14 @@ enum AppClient {
         timeout: Duration
     ) async throws -> WireResult {
         let outcome = FirstOutcome<WireResult>()
-        let exchange = Task {
+        let exchanging = Task {
             do {
                 outcome.finish(.success(try await exchange(request, over: socket, app: app)))
             } catch {
                 outcome.finish(.failure(error))
             }
         }
-        let timer = Task {
+        let timing = Task {
             // A cancelled sleep means the call already ended another way.
             guard (try? await Task.sleep(for: timeout)) != nil else { return }
             outcome.finish(.failure(BridgeError(
@@ -54,8 +54,8 @@ enum AppClient {
             )))
         }
         defer {
-            timer.cancel()
-            exchange.cancel()
+            timing.cancel()
+            exchanging.cancel()
             socket.close()
         }
         return try await withTaskCancellationHandler {
