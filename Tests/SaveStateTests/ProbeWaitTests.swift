@@ -43,27 +43,27 @@ struct ProbeWaitTests {
 
     // MARK: - Before waiting
 
+    // These use a zero timeout instead of timing the call: a wait that had to wait
+    // would throw timedOut, so passing proves the answer came before any waiting,
+    // however busy the machine is.
+
     @Test func aProbeThatAlreadyMatchesReturnsAtOnce() async throws {
         let registry = makeProbeRegistry(sync: sync)
         sync.pendingUploads = 3
 
-        let (probe, elapsed) = try await timed {
-            try await registry.wait(forProbe: "sync.pending-uploads", until: .atLeast(value: .int(3)), timeout: .seconds(10))
-        }
+        let probe = try await registry.wait(forProbe: "sync.pending-uploads", until: .atLeast(value: .int(3)), timeout: .zero)
 
         #expect(probe == ProbeDescription(key: "sync.pending-uploads", label: "Pending uploads", section: "Sync", value: .int(3)))
-        #expect(elapsed < .seconds(1))
     }
 
     @Test func anUnknownProbeThrowsBeforeWaiting() async {
         let registry = makeProbeRegistry(sync: sync)
 
-        let (thrown, elapsed) = await timed {
-            await error { try await registry.wait(forProbe: "nope", until: .equals(value: .int(1)), timeout: .seconds(10)) }
+        let thrown = await error {
+            try await registry.wait(forProbe: "nope", until: .equals(value: .int(1)), timeout: .zero)
         }
 
         #expect(thrown as? SaveStateError == .unknownProbe("nope"))
-        #expect(elapsed < .seconds(1))
     }
 
     @Test func aControlKeyIsAnUnknownProbe() async {
@@ -86,12 +86,9 @@ struct ProbeWaitTests {
     func anInapplicableConditionThrowsBeforeWaiting(key: String, condition: ProbeCondition, value: ControlValue) async {
         let registry = makeProbeRegistry(sync: sync)
 
-        let (thrown, elapsed) = await timed {
-            await error { try await registry.wait(forProbe: key, until: condition, timeout: .seconds(10)) }
-        }
+        let thrown = await error { try await registry.wait(forProbe: key, until: condition, timeout: .zero) }
 
         #expect(thrown as? SaveStateError == .invalidCondition(key: key, condition: condition, value: value))
-        #expect(elapsed < .seconds(1))
     }
 
     @Test func aDateProbeWaitsForAnISO8601String() async throws {
